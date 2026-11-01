@@ -1,0 +1,24 @@
+# dependencies
+**/node_modules/
+
+# frontend builds
+**/dist/
+**/dist-ssr/
+
+# Expo
+**/.expo/
+
+# Python
+**/__pycache__/
+*.py[cod]
+backend/venv/
+
+# local configuration and databases
+.env
+.env.*
+!.env.example
+backend/db.sqlite3
+
+# logs and OS files
+*.log
+.DS_Store
