@@ -104,21 +104,47 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }
   }, []);
 
+  // Fetch initial incidents and staff status on load
   useEffect(() => {
     void loadIncidents();
-  }, [loadIncidents]);
+
+    async function fetchStaffStatus() {
+      try {
+        const data = await supabaseRequest(`responder?select=availability_status&name=eq.${encodeURIComponent(displayName ?? '')}`);
+        if (data && data.length > 0 && data[0].availability_status) {
+          setAvailability(data[0].availability_status.toLowerCase());
+        }
+      } catch (err) {
+        console.error('Failed to fetch initial status:', err);
+      }
+    }
+    void fetchStaffStatus();
+  }, [loadIncidents, displayName]);
 
   const updateAvailability = async (status: string) => {
-    setAvailability(status);
+    const previousStatus = availability;
+    setAvailability(status); // Optimistic UI update
+    setError('');
+
     try {
-      await supabaseRequest(
-        `responder?name=eq.${encodeURIComponent(displayName)}`,
+      console.log(`Attempting to update status to '${status}' for user '${displayName}'...`);
+
+      const response = await supabaseRequest(
+        `responder?name=eq.${encodeURIComponent(displayName ?? '')}`,
         {
           method: 'PATCH',
           body: JSON.stringify({ availability_status: status }),
         }
       );
+
+      console.log('Supabase PATCH response:', response);
+
+      if (Array.isArray(response) && response.length === 0) {
+        throw new Error(`Database update failed: No responder row found matching name "${displayName}".`);
+      }
     } catch (err) {
+      console.error(`Failed to update status to '${status}':`, err);
+      setAvailability(previousStatus); // Revert UI if it failed
       setError(err instanceof Error ? err.message : 'Failed to update availability status in Supabase.');
     }
   };
@@ -297,7 +323,23 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
           <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
             <div><p className="text-sm text-slate-500">Tuesday, November 4, 2026</p><h1 className="mt-1 text-2xl font-bold">Good morning, {displayName}</h1><p className="mt-1 text-sm text-slate-500">Here is your clinic activity overview.</p></div>
             <div className="flex rounded-lg border border-slate-200 bg-white p-1">
-              {['available', 'busy', 'offline'].map((status) => <button key={status} onClick={() => void updateAvailability(status)} className={`rounded-md px-3 py-2 text-xs font-semibold capitalize ${availability.toLowerCase() === status ? status === 'available' ? 'bg-emerald-500 text-white' : status === 'busy' ? 'bg-amber-400 text-white' : 'bg-slate-600 text-white' : 'text-slate-500'}`}>{status}</button>)}
+              {['available', 'busy', 'offline'].map((status) => (
+                <button
+                  key={status}
+                  onClick={() => void updateAvailability(status)}
+                  className={`rounded-md px-3 py-2 text-xs font-semibold capitalize transition-colors ${
+                    availability.toLowerCase() === status
+                      ? status === 'available'
+                        ? 'bg-emerald-500 text-white shadow-sm'
+                        : status === 'busy'
+                        ? 'bg-amber-600 text-white shadow-sm'
+                        : 'bg-slate-600 text-white shadow-sm'
+                      : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                >
+                  {status}
+                </button>
+              ))}
             </div>
           </div>
 

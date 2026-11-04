@@ -1,15 +1,21 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Users, UserPlus, X, RefreshCw, AlertCircle } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { ResponderCard } from '../components/ResponderCard';
 import { DataNotice } from '../DataNotice';
-import { useAdminData } from '../useAdminData';
 import { createResponder } from '../api';
+import { createClient } from '@supabase/supabase-js';
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const supabase = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
 export function Responders() {
-  const { responders, loading, error } = useAdminData();
+  const [responders, setResponders] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -21,6 +27,43 @@ export function Responders() {
   const [contactNumber, setContactNumber] = useState('');
   const [availabilityStatus, setAvailabilityStatus] = useState('available');
   const [userType, setUserType] = useState('responder');
+
+  // Fetch responders directly from Supabase so there is zero backend lag or stale cache
+  const fetchRespondersDirectly = async () => {
+    if (!supabase) return;
+    try {
+      setLoading(true);
+      const { data, error } = await supabase.from('responder').select('*');
+      if (error) throw error;
+      setResponders(data || []);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load responders');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Real-time listener: instantly fetches live data when any row changes in Supabase
+  useEffect(() => {
+    void fetchRespondersDirectly();
+
+    if (!supabase) return;
+
+    const channel = supabase
+      .channel('admin-responders-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'responder' },
+        () => {
+          void fetchRespondersDirectly(); // Refetches seamlessly in the background without a page reload
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const handleAddResponder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,7 +98,7 @@ export function Responders() {
       setContactNumber('');
       setAvailabilityStatus('available');
       setUserType('responder');
-      window.location.reload();
+      void fetchRespondersDirectly();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to create responder or staff member.');
     } finally {
@@ -63,10 +106,20 @@ export function Responders() {
     }
   };
 
-  const getStatus = (r: any) => (r.status || r.availability_status || 'available').toLowerCase();
+  // Bulletproof status normalizer
+  const getStatus = (r: any) => {
+    const raw = r.status || r.availability_status || 'available';
+    const val = String(raw).trim().toLowerCase();
+    
+    // Normalize any variation of busy/on-duty to 'busy'
+    if (['busy', 'on_duty', 'assigned', 'responding', 'on-call'].includes(val)) {
+      return 'busy';
+    }
+    return val;
+  };
 
   const availableCount = responders.filter(r => getStatus(r) === 'available').length;
-  const assignedCount = responders.filter(r => ['assigned', 'responding', 'busy', 'on_duty'].includes(getStatus(r))).length;
+  const assignedCount = responders.filter(r => getStatus(r) === 'busy').length;
   const offlineCount = responders.filter(r => getStatus(r) === 'offline').length;
 
   return (
@@ -113,7 +166,7 @@ export function Responders() {
         <Card className="bg-gradient-to-br from-[#FACC15]/20 to-[#FACC15]/5 border-[#FACC15]/30 p-5">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">On Duty / Busy</p>
+              <p className="text-gray-400 text-sm mb-1">Busy</p>
               <p className="text-3xl font-bold text-white">{assignedCount}</p>
             </div>
             <Users className="w-8 h-8 text-[#FACC15]" />
@@ -151,18 +204,18 @@ export function Responders() {
           </div>
         </div>
 
-        {/* On Duty Responders */}
+        {/* Busy Responders */}
         <div>
           <div className="flex items-center gap-3 mb-4">
             <Badge className="bg-[#FACC15]/20 text-[#FACC15] border-[#FACC15]/50">
               <div className="w-2 h-2 bg-[#FACC15] rounded-full animate-pulse mr-2"></div>
-              On Duty / Busy
+              Busy
             </Badge>
             <span className="text-sm text-gray-400">{assignedCount} responders active</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {responders
-              .filter(r => ['assigned', 'responding', 'busy', 'on_duty'].includes(getStatus(r)))
+              .filter(r => getStatus(r) === 'busy')
               .map((responder: any) => (
                 <ResponderCard key={responder.responders_id || responder.id} responder={responder} />
               ))}
@@ -281,7 +334,7 @@ export function Responders() {
                     className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
                   >
                     <option value="available">Available</option>
-                    <option value="busy">Busy / On Duty</option>
+                    <option value="busy">Busy</option>
                     <option value="offline">Offline</option>
                   </select>
                 </div>
