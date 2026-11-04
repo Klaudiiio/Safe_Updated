@@ -1,6 +1,12 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
-from .views import LoginView, RegisterView, SupabaseTokenView, SyncProfileView
+from .views import (
+    LoginView,
+    RegisterView,
+    SupabaseTokenView,
+    SyncProfileView,
+    CreateClinicStaffView
+)
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
@@ -8,4 +14,5 @@ urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view(), name='refresh'),
     path('token/supabase/', SupabaseTokenView.as_view(), name='supabase-token'),
     path('profile/sync/', SyncProfileView.as_view(), name='profile-sync'),
+    path('clinic-staff/create/', CreateClinicStaffView.as_view(), name='clinic-staff-create'),
 ]

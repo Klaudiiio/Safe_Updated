@@ -49,7 +49,7 @@ export default function AuthPage({ onLoginSuccess }: AuthPageProps) {
         throw new Error('The server returned an incomplete login response.');
       }
       if (data.user.role !== 'admin') {
-        throw new Error('This web portal is for admin accounts only. Use the mobile app for user access.');
+        throw new Error('This web portal is for admin accounts only. Use the clinic staff portal for clinic access.');
       }
 
       localStorage.setItem('access_token', data.access);
@@ -82,8 +82,8 @@ export default function AuthPage({ onLoginSuccess }: AuthPageProps) {
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-red-500/10 text-red-500 mb-3 border border-red-500/20">
             <ShieldAlert className="w-7 h-7" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">SAFE Admin Portal</h1>
-          <p className="text-sm text-slate-400 mt-1">Sign in to manage the safety dashboard</p>
+          <h1 className="text-2xl font-bold tracking-tight text-white">SAFE Portal</h1>
+          <p className="text-sm text-slate-400 mt-1">Admin and clinic staff sign in</p>
         </header>
 
         {error && (
@@ -111,7 +111,7 @@ export default function AuthPage({ onLoginSuccess }: AuthPageProps) {
                 required
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
-                placeholder="Enter your admin username"
+                placeholder="Enter your username"
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-sm focus:outline-none focus:border-red-500 transition"
               />
             </div>
@@ -141,7 +141,7 @@ export default function AuthPage({ onLoginSuccess }: AuthPageProps) {
             disabled={loading}
             className="w-full mt-2 py-3 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-semibold rounded-xl text-sm transition shadow-lg shadow-red-600/20 disabled:opacity-50"
           >
-            {loading ? 'Signing in...' : 'Sign in to Admin Dashboard'}
+            {loading ? 'Signing in...' : 'Sign in to Dashboard'}
           </button>
         </form>
 

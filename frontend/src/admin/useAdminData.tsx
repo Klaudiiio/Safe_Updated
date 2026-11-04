@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchAdminOverview, subscribeToIncidentInserts } from './api';
+import { fetchAdminOverview, supabase } from './api';
 import {
   mapIncidents,
   mapLogs,
@@ -22,6 +22,15 @@ interface AdminDataState {
   error: string | null;
 }
 
+const playAdminAlertSound = () => {
+  try {
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+    audio.play().catch(() => {});
+  } catch (e) {
+    // Ignore audio autoplay restrictions if blocked by browser
+  }
+};
+
 export function useAdminData(): AdminDataState {
   const [data, setData] = useState<AdminDataState>({
     incidents: [],
@@ -36,14 +45,27 @@ export function useAdminData(): AdminDataState {
   const loadData = useCallback(async (signal?: AbortSignal) => {
     try {
       const overview: SupabaseOverview = await fetchAdminOverview(signal);
-      setData({
-        incidents: mapIncidents(overview),
-        responders: mapResponders(overview),
-        users: mapUsers(overview),
-        logs: mapLogs(overview),
-        notifications: mapNotifications(overview),
-        loading: false,
-        error: null,
+      const processedIncidents = mapIncidents(overview);
+      const processedNotifs = mapNotifications(overview);
+
+      setData((current) => {
+        const fetchedIds = new Set(
+          processedNotifs.map((n: any) => String(n.id || n.notification_id))
+        );
+
+        const localRealtimeNotifs = current.notifications.filter(
+          (n: any) => !fetchedIds.has(String(n.id || n.notification_id))
+        );
+
+        return {
+          incidents: processedIncidents,
+          responders: mapResponders(overview),
+          users: mapUsers(overview),
+          logs: mapLogs(overview),
+          notifications: [...localRealtimeNotifs, ...processedNotifs],
+          loading: false,
+          error: null,
+        };
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -58,33 +80,66 @@ export function useAdminData(): AdminDataState {
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
-    let unsubscribe: (() => void) | null = null;
+    let unsubscribeChannel: (() => void) | null = null;
+
+    // Initial data fetch on mount
     void Promise.resolve().then(() => {
       if (active) return loadData(controller.signal);
       return undefined;
     });
-    void Promise.resolve()
-      .then(() => subscribeToIncidentInserts(
-        () => void loadData(),
-        (message) => setData((current) => ({ ...current, error: message })),
-      ))
-      .then((cleanup) => {
-        if (active) unsubscribe = cleanup;
-        else cleanup();
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
-        setData((current) => ({
-          ...current,
-          error: error instanceof Error ? error.message : 'Could not subscribe to Supabase Realtime.',
-        }));
-      });
-    const intervalId = window.setInterval(() => void loadData(), 15_000);
+
+    // Set up Realtime listener using fluent method chaining to avoid race conditions
+    try {
+      if (supabase) {
+        const client = supabase;
+        const channelName = `admin-realtime-channel-${Date.now()}`;
+
+        const realTimeChannel = client
+          .channel(channelName)
+          .on(
+            'postgres_changes',
+            { event: 'INSERT', schema: 'public', table: 'notification' },
+            async (payload: any) => {
+              console.log('⚡ NEW NOTIFICATION ARRIVED:', payload);
+              if (!active) return;
+
+              // 1. Re-fetch and re-map all overview data instantly
+              await loadData();
+
+              // 2. Play audio chime alert exactly once
+              playAdminAlertSound();
+
+              // 3. Notify header notification bell to bounce & increment unread counter
+              window.dispatchEvent(
+                new CustomEvent('safe:new-incident-alert', {
+                  detail: payload.new,
+                })
+              );
+            }
+          )
+          .subscribe((status, err) => {
+            console.log(`🔌 Supabase Realtime Status [${channelName}]:`, status);
+            if (err) {
+              console.error('❌ Supabase Realtime Subscription Error:', err);
+            }
+          });
+
+        unsubscribeChannel = () => {
+          try {
+            void client.removeChannel(realTimeChannel);
+          } catch (err) {
+            // Teardown fallback
+          }
+        };
+      }
+    } catch (e) {
+      console.warn('Could not set up realtime subscription', e);
+    }
+
     return () => {
       active = false;
       controller.abort();
-      unsubscribe?.();
-      window.clearInterval(intervalId);
+      unsubscribeChannel?.();
     };
   }, [loadData]);
 

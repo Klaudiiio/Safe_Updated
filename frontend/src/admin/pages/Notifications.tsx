@@ -1,10 +1,11 @@
-import { AlertCircle, Bell, CheckCircle, Clock, Radio } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Bell, CheckCircle, Clock, Radio } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { DataNotice } from '../DataNotice';
 import { useAdminData } from '../useAdminData';
 
-function notificationTime(value: string): string {
+function notificationTime(value?: string): string {
+  if (!value) return 'Time unavailable';
   const timestamp = new Date(value);
   if (Number.isNaN(timestamp.getTime())) return 'Time unavailable';
   return timestamp.toLocaleString();
@@ -12,33 +13,46 @@ function notificationTime(value: string): string {
 
 export function Notifications() {
   const { notifications, loading, error } = useAdminData();
-  const criticalCount = notifications.filter((notification) => (
-    notification.type.toLowerCase().includes('critical')
-      || notification.type.toLowerCase().includes('urgent')
-  )).length;
-  const deliveredCount = notifications.filter((notification) => (
-    notification.status.toLowerCase() === 'sent'
-      || notification.status.toLowerCase() === 'delivered'
-  )).length;
+
+  const safeNotifications = notifications || [];
+
+  const criticalCount = safeNotifications.filter((notification: any) => {
+    const priority = (notification.priority || notification.priority_level || '').toLowerCase();
+    const typeStr = (notification.type || notification.title || '').toLowerCase();
+    return priority === 'urgent' || priority === 'critical' || typeStr.includes('urgent') || typeStr.includes('critical');
+  }).length;
+
+  const minorCount = safeNotifications.filter((notification: any) => {
+    const priority = (notification.priority || notification.priority_level || '').toLowerCase();
+    const typeStr = (notification.type || notification.title || '').toLowerCase();
+    return priority === 'minor' || typeStr.includes('minor') || typeStr.includes('warning');
+  }).length;
+
+  const deliveredCount = safeNotifications.filter((notification: any) => {
+    const status = (notification.status || notification.delivery_status || 'sent').toLowerCase();
+    return status === 'sent' || status === 'delivered' || status === 'active';
+  }).length;
 
   return (
     <div className="space-y-6">
       <DataNotice loading={loading} error={error} />
       <div>
         <h1 className="text-2xl font-bold text-white mb-1">System Notifications</h1>
-        <p className="text-gray-400 text-sm">Read-only delivery records synchronized from Supabase</p>
+        <p className="text-gray-400 text-sm">Real-time emergency alerts and notification records synchronized from Supabase</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Metric Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-5">
           <div className="flex items-start justify-between">
             <div>
               <p className="text-gray-400 text-sm mb-1">Total Notifications</p>
-              <p className="text-3xl font-bold text-white">{notifications.length}</p>
+              <p className="text-3xl font-bold text-white">{safeNotifications.length}</p>
             </div>
             <Bell className="w-8 h-8 text-gray-400" />
           </div>
         </Card>
+
         <Card className="bg-gradient-to-br from-[#FF3B30]/20 to-[#FF3B30]/5 border-[#FF3B30]/30 p-5">
           <div className="flex items-start justify-between">
             <div>
@@ -48,6 +62,17 @@ export function Notifications() {
             <AlertCircle className="w-8 h-8 text-[#FF3B30]" />
           </div>
         </Card>
+
+        <Card className="bg-gradient-to-br from-[#F59E0B]/20 to-[#F59E0B]/5 border-[#F59E0B]/30 p-5">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-gray-400 text-sm mb-1">Minor Alerts</p>
+              <p className="text-3xl font-bold text-white">{minorCount}</p>
+            </div>
+            <AlertTriangle className="w-8 h-8 text-[#F59E0B]" />
+          </div>
+        </Card>
+
         <Card className="bg-gradient-to-br from-[#22C55E]/20 to-[#22C55E]/5 border-[#22C55E]/30 p-5">
           <div className="flex items-start justify-between">
             <div>
@@ -59,44 +84,93 @@ export function Notifications() {
         </Card>
       </div>
 
+      {/* Notifications List */}
       <div className="space-y-4">
         <h2 className="text-lg font-semibold text-white">Recent Notifications</h2>
         <div className="space-y-3">
-          {notifications.map((notification) => {
-            const type = notification.type.toLowerCase();
-            const Icon = type.includes('critical') || type.includes('urgent')
+          {safeNotifications.map((notification: any) => {
+            const id = notification.notification_id || notification.id || Math.random();
+            const message = notification.message || notification.content || (notification.incident_id ? `Incident #${notification.incident_id}` : 'System alert broadcast');
+            const sentAt = notification.sent_at || notification.sentAt || notification.created_at;
+            const status = notification.status || notification.delivery_status || 'Sent';
+            const incidentId = notification.incident_id || notification.incidentId;
+
+            const priority = (notification.priority || notification.priority_level || '').toLowerCase();
+            const typeStr = (notification.type || notification.title || '').toLowerCase();
+
+            const isCritical = priority === 'urgent' || priority === 'critical' || typeStr.includes('urgent') || typeStr.includes('critical');
+            const isMinor = priority === 'minor' || typeStr.includes('minor') || typeStr.includes('warning');
+
+            const Icon = isCritical
               ? AlertCircle
-              : type.includes('success') || type.includes('resolved')
-                ? CheckCircle
-                : type.includes('warning')
-                  ? Clock
-                  : Radio;
-            const critical = Icon === AlertCircle;
+              : isMinor
+                ? AlertTriangle
+                : typeStr.includes('success') || typeStr.includes('resolved')
+                  ? CheckCircle
+                  : typeStr.includes('clock')
+                    ? Clock
+                    : Radio;
+
             return (
               <Card
-                key={notification.id}
-                className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-4"
+                key={id}
+                className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-4 transition-colors hover:bg-[#0F1825]"
               >
                 <div className="flex items-start gap-4">
-                  <div className={`w-12 h-12 ${critical ? 'bg-[#FF3B30]/20' : 'bg-[#3B82F6]/20'} rounded-lg flex items-center justify-center flex-shrink-0`}>
-                    <Icon className={`w-6 h-6 ${critical ? 'text-[#FF3B30]' : 'text-[#3B82F6]'}`} />
+                  <div className={`w-12 h-12 ${
+                    isCritical
+                      ? 'bg-[#FF3B30]/20 border border-[#FF3B30]/30'
+                      : isMinor
+                        ? 'bg-[#F59E0B]/20 border border-[#F59E0B]/30'
+                        : 'bg-[#3B82F6]/20 border border-[#3B82F6]/30'
+                  } rounded-lg flex items-center justify-center flex-shrink-0`}>
+                    <Icon className={`w-6 h-6 ${
+                      isCritical
+                        ? 'text-[#FF3B30]'
+                        : isMinor
+                          ? 'text-[#F59E0B]'
+                          : 'text-[#3B82F6]'
+                    }`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-3">
-                      <h3 className="font-semibold text-white">{notification.type || 'Notification'}</h3>
-                      <span className="text-xs text-gray-500">{notificationTime(notification.sentAt)}</span>
+                      <h3 className="font-semibold text-white text-base">
+                        {notification.title || notification.type || 'System Alert'}
+                      </h3>
+                      <span className="text-xs text-gray-500 font-mono">
+                        {notificationTime(sentAt)}
+                      </span>
                     </div>
-                    <p className="mt-1 text-sm text-gray-400">Incident {notification.incidentId}</p>
-                    <Badge className="mt-3 bg-gray-500/20 text-gray-300 border-gray-500/50">
-                      Delivery: {notification.status}
-                    </Badge>
+                    
+                    <p className="mt-1 text-sm text-gray-300 leading-relaxed">
+                      {message}
+                    </p>
+
+                    {incidentId && (
+                      <p className="mt-1 text-xs text-blue-400 font-mono">
+                        Related Incident: #{incidentId}
+                      </p>
+                    )}
+
+                    <div className="mt-3 flex items-center gap-2">
+                      <Badge className="bg-gray-800 text-gray-300 border-gray-700 text-xs">
+                        Delivery: {status}
+                      </Badge>
+                      {notification.priority_level && (
+                        <Badge className={`text-xs ${isCritical ? 'bg-red-950 text-red-300 border-red-800' : 'bg-amber-950 text-amber-300 border-amber-800'}`}>
+                          Priority: {notification.priority_level}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                 </div>
               </Card>
             );
           })}
-          {!loading && !error && notifications.length === 0 && (
-            <p className="py-8 text-center text-sm text-gray-400">No notifications found.</p>
+          {!loading && !error && safeNotifications.length === 0 && (
+            <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 py-12 text-center text-gray-400">
+              <p className="text-sm">No notifications found.</p>
+            </Card>
           )}
         </div>
       </div>

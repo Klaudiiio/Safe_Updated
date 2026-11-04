@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Outlet, Link, useLocation } from 'react-router';
+import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   AlertCircle,
@@ -30,6 +30,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
+import { useAdminData } from '../useAdminData';
 
 const menuItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
@@ -43,15 +44,6 @@ const menuItems = [
   { icon: Settings, label: 'Settings', path: '/settings' },
 ];
 
-interface NotificationItem {
-  id: string;
-  title: string;
-  message: string;
-  time: string;
-  path: string;
-  isRead: boolean;
-}
-
 interface DashboardLayoutProps {
   displayName: string;
   onLogout: () => void;
@@ -60,48 +52,62 @@ interface DashboardLayoutProps {
 export function DashboardLayout({ displayName, onLogout }: DashboardLayoutProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [now, setNow] = useState(() => new Date());
+  const [isRinging, setIsRinging] = useState(false);
+ 
+  // Safe location fallback in case router context is momentarily absent during hot reloads
   const location = useLocation();
-  const initials = displayName.slice(0, 2).toUpperCase();
+  const currentPath = location?.pathname || '/';
 
-  // Notification State
-  const [notifications, setNotifications] = useState<NotificationItem[]>([
-    {
-      id: '1',
-      title: 'New Incident Reported',
-      message: 'A medical emergency report was submitted near Campus Main Gate.',
-      time: '2m ago',
-      path: '/active-incidents',
-      isRead: false,
-    },
-    {
-      id: '2',
-      title: 'Responder Dispatched',
-      message: 'Unit 4 responded to medical alert #1042.',
-      time: '15m ago',
-      path: '/responders',
-      isRead: false,
-    },
-    {
-      id: '3',
-      title: 'System Status Normal',
-      message: 'Django and Supabase synchronization status verified.',
-      time: '1h ago',
-      path: '/emergency-reports',
-      isRead: false,
-    },
-  ]);
+  const initials = (displayName || 'Admin').slice(0, 2).toUpperCase();
 
-  const unreadCount = notifications.filter((n) => !n.isRead).length;
+  // Fetch live notifications directly from Supabase via useAdminData
+  const { notifications: rawNotifications } = useAdminData();
+
+  // Local state to manage read/unread states instantly in the UI dropdown
+  const [readMap, setReadMap] = useState<Record<string, boolean>>({});
+
+  const notifications = (rawNotifications || []).map((n: Record<string, any>) => {
+    const id = String(n.notification_id || n.id);
+    const isRead = readMap[id] ?? Boolean(n.is_read || n.read || false);
+    return {
+      id,
+      title: n.title || 'System Alert',
+      message: n.message || n.content || '',
+      time: n.sent_at || n.time
+        ? new Date(n.sent_at || n.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : 'Recent',
+      path: '/notifications',
+      isRead,
+    };
+  });
+
+  const unreadCount = notifications.filter((n: { isRead: boolean }) => !n.isRead).length;
 
   const markAsRead = (id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, isRead: true } : n))
-    );
+    setReadMap((prev) => ({ ...prev, [id]: true }));
   };
 
   const markAllAsRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    const newMap: Record<string, boolean> = {};
+    notifications.forEach((n: { id: string }) => {
+      newMap[n.id] = true;
+    });
+    setReadMap(newMap);
   };
+
+  // Listen for real-time alert events from useAdminData to animate bell ringing
+  useEffect(() => {
+    const handleNewAlert = () => {
+      setIsRinging(true);
+      const timer = setTimeout(() => setIsRinging(false), 2500);
+      return () => clearTimeout(timer);
+    };
+
+    window.addEventListener('safe:new-incident-alert', handleNewAlert);
+    return () => {
+      window.removeEventListener('safe:new-incident-alert', handleNewAlert);
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60_000);
@@ -143,7 +149,7 @@ export function DashboardLayout({ displayName, onLogout }: DashboardLayoutProps)
         <nav className="max-h-[calc(100vh-220px)] overflow-y-auto p-4 space-y-1">
           {menuItems.map((item) => {
             const Icon = item.icon;
-            const isActive = location.pathname === item.path;
+            const isActive = currentPath === item.path;
            
             return (
               <Link
@@ -209,17 +215,17 @@ export function DashboardLayout({ displayName, onLogout }: DashboardLayoutProps)
                 </div>
               </div>
 
-              {/* Notifications Dropdown */}
+              {/* Notifications Dropdown (Bell Icon) */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="relative text-gray-400 hover:text-white focus:outline-none"
+                    className="relative text-gray-400 hover:text-white focus:outline-none cursor-pointer"
                   >
-                    <Bell className="w-5 h-5" />
+                    <Bell className={`w-5 h-5 transition-transform ${isRinging ? 'animate-bounce text-[#FF3B30] scale-125' : ''}`} />
                     {unreadCount > 0 && (
-                      <Badge className="absolute -top-1 -right-1 w-5 h-5 flex items-center justify-center p-0 bg-[#FF3B30] text-white text-xs border-2 border-[#0F1825]">
+                      <Badge className="absolute -top-1 -right-1 w-5 h-5 flex items-center justify-center p-0 bg-[#FF3B30] text-white text-xs border-2 border-[#0F1825] animate-pulse">
                         {unreadCount}
                       </Badge>
                     )}
@@ -241,43 +247,49 @@ export function DashboardLayout({ displayName, onLogout }: DashboardLayoutProps)
                     )}
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator className="bg-gray-800" />
-                  
+                 
                   <div className="max-h-72 overflow-y-auto divide-y divide-gray-800/50">
-                    {notifications.map((item) => (
-                      <DropdownMenuItem key={item.id} asChild>
-                        <Link
-                          to={item.path}
-                          onClick={() => markAsRead(item.id)}
-                          className={`flex flex-col items-start gap-1 p-3 transition-colors cursor-pointer ${
-                            item.isRead
-                              ? 'opacity-60 bg-transparent hover:bg-gray-800/40 text-gray-400'
-                              : 'bg-gray-800/20 hover:bg-gray-800 text-gray-200 font-medium'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between w-full">
-                            <div className="flex items-center gap-2">
-                              {!item.isRead && (
-                                <span className="w-2 h-2 rounded-full bg-[#FF3B30]" />
-                              )}
-                              <span className={`text-sm ${item.isRead ? 'text-gray-300' : 'text-white font-semibold'}`}>
-                                {item.title}
-                              </span>
+                    {notifications.length > 0 ? (
+                      notifications.map((item: { id: string; path: string; isRead: boolean; title: string; time: string; message: string }) => (
+                        <DropdownMenuItem key={item.id} asChild>
+                          <Link
+                            to={item.path}
+                            onClick={() => markAsRead(item.id)}
+                            className={`flex flex-col items-start gap-1 p-3 transition-colors cursor-pointer ${
+                              item.isRead
+                                ? 'opacity-60 bg-transparent hover:bg-gray-800/40 text-gray-400'
+                                : 'bg-gray-800/20 hover:bg-gray-800 text-gray-200 font-medium'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between w-full">
+                              <div className="flex items-center gap-2">
+                                {!item.isRead && (
+                                  <span className="w-2 h-2 rounded-full bg-[#FF3B30]" />
+                                )}
+                                <span className={`text-sm ${item.isRead ? 'text-gray-300' : 'text-white font-semibold'}`}>
+                                  {item.title}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-gray-400">{item.time}</span>
                             </div>
-                            <span className="text-[10px] text-gray-400">{item.time}</span>
-                          </div>
-                          <p className="text-xs text-gray-400 line-clamp-2 pl-4">
-                            {item.message}
-                          </p>
-                        </Link>
-                      </DropdownMenuItem>
-                    ))}
+                            <p className="text-xs text-gray-400 line-clamp-2 pl-4">
+                              {item.message}
+                            </p>
+                          </Link>
+                        </DropdownMenuItem>
+                      ))
+                    ) : (
+                      <div className="p-4 text-center text-xs text-gray-500">
+                        No notifications found.
+                      </div>
+                    )}
                   </div>
 
                   <DropdownMenuSeparator className="bg-gray-800" />
                   <DropdownMenuItem asChild>
-                    <Link 
-                      to="/notifications" 
-                      className="w-full text-center text-xs font-semibold text-[#3B82F6] hover:underline justify-center py-2 focus:bg-gray-800 focus:text-[#3B82F6]"
+                    <Link
+                      to="/notifications"
+                      className="w-full text-center text-xs font-semibold text-[#3B82F6] hover:underline justify-center py-2 focus:bg-gray-800 focus:text-[#3B82F6] cursor-pointer"
                     >
                       View All Notifications
                     </Link>
@@ -288,7 +300,7 @@ export function DashboardLayout({ displayName, onLogout }: DashboardLayoutProps)
               {/* Profile */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm" className="gap-2">
+                  <Button variant="ghost" size="sm" className="gap-2 cursor-pointer">
                     <Avatar className="w-8 h-8">
                       <AvatarFallback className="bg-gradient-to-br from-[#FF3B30] to-[#3B82F6] text-white text-sm">
                         {initials}
@@ -303,16 +315,16 @@ export function DashboardLayout({ displayName, onLogout }: DashboardLayoutProps)
                 <DropdownMenuContent align="end" className="w-56 bg-[#0F1825] border-gray-800">
                   <DropdownMenuLabel className="text-white">My Account</DropdownMenuLabel>
                   <DropdownMenuSeparator className="bg-gray-800" />
-                  <DropdownMenuItem className="text-gray-300 focus:text-white focus:bg-gray-800">
+                  <DropdownMenuItem className="text-gray-300 focus:text-white focus:bg-gray-800 cursor-pointer">
                     Profile Settings
                   </DropdownMenuItem>
-                  <DropdownMenuItem className="text-gray-300 focus:text-white focus:bg-gray-800">
+                  <DropdownMenuItem className="text-gray-300 focus:text-white focus:bg-gray-800 cursor-pointer">
                     Preferences
                   </DropdownMenuItem>
                   <DropdownMenuSeparator className="bg-gray-800" />
                   <DropdownMenuItem
                     onClick={onLogout}
-                    className="text-[#FF3B30] focus:text-[#FF3B30] focus:bg-gray-800"
+                    className="text-[#FF3B30] focus:text-[#FF3B30] focus:bg-gray-800 cursor-pointer"
                   >
                     Sign Out
                   </DropdownMenuItem>

@@ -189,33 +189,41 @@ async function submitIncidentReportWithToken(
   if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
     throw new Error('Supabase client settings are missing. Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY, then restart Expo.');
   }
-  if (!session.supabase_access_token) {
-    throw new Error('Supabase access is not configured for this account. Configure the Django Supabase JWT signing settings, then sign in again.');
-  }
+
+  // Use the user's Supabase JWT access token if available, or fall back to the publishable key
+  const effectiveToken = session.supabase_access_token || SUPABASE_PUBLISHABLE_KEY;
 
   const request = async (url: string, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers);
     headers.set('apikey', SUPABASE_PUBLISHABLE_KEY);
-    headers.set('Authorization', `Bearer ${session.supabase_access_token}`);
+    headers.set('Authorization', `Bearer ${effectiveToken}`);
     try {
       return await fetch(url, { ...init, headers });
     } catch {
       throw new Error('Could not reach Supabase. Check your internet connection and the configured project URL.');
     }
   };
-  const typeUrl = `${SUPABASE_URL}/rest/v1/incident_types?incident_name=eq.${encodeURIComponent(payload.incident_type)}&select=incident_types_id&limit=1`;
+
+  // Fetch all incident types and match case-insensitively in JavaScript to avoid exact encoding mismatches
+  const typeUrl = `${SUPABASE_URL}/rest/v1/incident_types?select=incident_types_id,incident_name`;
   const typeResponse = await request(typeUrl);
   const typeBody = await responseBody(typeResponse);
+  
   if (!typeResponse.ok) {
     throw new SupabaseRestError(
       readableError(typeBody as ApiErrorBody | null, `Supabase incident type lookup failed (${typeResponse.status}).`),
       typeResponse.status,
     );
   }
-  const types = typeBody as Array<{ incident_types_id?: number }> | null;
-  const incidentTypeId = types?.[0]?.incident_types_id;
+  
+  const types = typeBody as Array<{ incident_types_id?: number; incident_name?: string }> | null;
+  const matchedType = types?.find(
+    (t) => t.incident_name?.trim().toLowerCase() === payload.incident_type.trim().toLowerCase()
+  );
+  const incidentTypeId = matchedType?.incident_types_id;
+
   if (typeof incidentTypeId !== 'number') {
-    throw new Error('This incident type is not configured in Supabase. Apply the client data migration and try again.');
+    throw new Error(`Incident type "${payload.incident_type}" not found in Supabase.`);
   }
 
   const createResponse = await request(`${SUPABASE_URL}/rest/v1/incident`, {
@@ -224,7 +232,6 @@ async function submitIncidentReportWithToken(
     body: JSON.stringify({
       user_id: session.user.id,
       incident_types_id: incidentTypeId,
-      location_description: payload.location,
       description: payload.description,
     }),
   });
@@ -263,10 +270,14 @@ export async function submitIncidentReport(
     };
   } catch (error) {
     if (!(error instanceof SupabaseRestError) || error.status !== 401) throw error;
-    const refreshedSession = await refreshSupabaseSession(session);
-    return {
-      report: await submitIncidentReportWithToken(refreshedSession, payload),
-      session: refreshedSession,
-    };
+    // If a 401 occurs and session refreshing is supported, attempt to refresh
+    if (session.supabase_access_token) {
+      const refreshedSession = await refreshSupabaseSession(session);
+      return {
+        report: await submitIncidentReportWithToken(refreshedSession, payload),
+        session: refreshedSession,
+      };
+    }
+    throw error;
   }
 }

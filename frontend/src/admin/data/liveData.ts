@@ -17,6 +17,10 @@ export interface LiveNotification {
   type: string;
   sentAt: string;
   status: string;
+  priority_level: string;
+  priority: string;
+  isCritical: boolean;
+  incident?: any;
 }
 
 export interface SupabaseOverview {
@@ -180,11 +184,42 @@ export function mapLogs(data: SupabaseOverview): IncidentLog[] {
 }
 
 export function mapNotifications(data: SupabaseOverview): LiveNotification[] {
-  return data.notifications.map((row) => ({
-    id: text(row.notification_id),
-    incidentId: text(row.incident_id),
-    type: text(row.notification_type),
-    sentAt: text(row.sent_at),
-    status: text(row.delivery_status),
+  const incidentTypeMap = new Map(data.incident_types.map((row) => [key(row.incident_types_id), row]));
+  const incidentMap = new Map(data.incidents.map((row) => {
+    const type = incidentTypeMap.get(key(row.incident_types_id));
+    return [key(row.incident_id), { ...row, incident_types: type }];
   }));
+
+  const seenIds = new Set<string>();
+  const results: LiveNotification[] = [];
+
+  for (const row of data.notifications) {
+    const id = text(row.notification_id || row.id);
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+
+    const incident = incidentMap.get(key(row.incident_id));
+    const priorityLevel = (
+      (incident?.incident_types as any)?.priority_level ||
+      row.priority_level ||
+      row.priority ||
+      'MINOR'
+    ).toUpperCase();
+
+    const isUrgent = priorityLevel === 'URGENT' || priorityLevel.includes('CRITICAL');
+
+    results.push({
+      id,
+      incidentId: text(row.incident_id),
+      type: text(row.notification_type || row.type),
+      sentAt: text(row.sent_at),
+      status: text(row.delivery_status || row.status),
+      priority_level: priorityLevel,
+      priority: isUrgent ? 'critical' : 'minor',
+      isCritical: isUrgent,
+      incident,
+    });
+  }
+
+  return results;
 }

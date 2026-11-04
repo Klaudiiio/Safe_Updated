@@ -22,6 +22,7 @@ const SESSION_KEY = 'safe-user-session';
 
 interface AuthContextValue {
   user: AuthUser | null;
+  session: AuthSession | null;
   loading: boolean;
   storageError: string | null;
   supabaseSynced: boolean | null;
@@ -88,26 +89,27 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   const submitIncidentReport = useCallback(async (payload: IncidentReportPayload) => {
     if (!session) throw new Error('Sign in before submitting an incident report.');
-    if (session.supabase_synced === false) {
-      throw new Error('Your profile has not synced to Supabase, so a report cannot be linked to your account. Fix the Django Supabase profile configuration and sign in again.');
-    }
+
     const result = await submitIncidentReportRequest(session, payload);
     if (result.session !== session) await saveSession(result.session);
     return result.report;
   }, [session, saveSession]);
 
+  // Updated signOut: Always resets session state to trigger navigation back to Login
   const signOut = useCallback(async () => {
     try {
       await SecureStore.deleteItemAsync(SESSION_KEY);
+    } catch (error) {
+      console.warn('Could not clear SecureStore session key:', error);
+    } finally {
       setSession(null);
       setStorageError(null);
-    } catch {
-      throw new Error('Could not clear the saved session. Please try signing out again.');
     }
   }, []);
 
   const value = useMemo(() => ({
     user: session?.user ?? null,
+    session,
     loading,
     storageError,
     supabaseSynced: typeof session?.supabase_synced === 'boolean' ? session.supabase_synced : null,

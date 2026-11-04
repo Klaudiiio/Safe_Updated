@@ -6,18 +6,39 @@ import { IncidentCard } from '../components/IncidentCard';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { DataNotice } from '../DataNotice';
 import { useAdminData } from '../useAdminData';
+import { updateIncidentStatus } from '../api';
 
 export function ActiveIncidents() {
   const { incidents, loading, error } = useAdminData();
-  const activeIncidents = incidents.filter(i => i.status !== 'resolved');
+  const activeIncidents = incidents.filter((i: any) => i.status?.toLowerCase() !== 'resolved');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [buildingFilter, setBuildingFilter] = useState('all');
-  const filteredIncidents = activeIncidents.filter((incident) => (
-    (severityFilter === 'all' || incident.severity === severityFilter)
-    && (statusFilter === 'all' || incident.status === statusFilter)
-    && (buildingFilter === 'all' || incident.building.toLowerCase().includes(buildingFilter))
-  ));
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  const filteredIncidents = activeIncidents.filter((incident: any) => {
+    const sev = (incident.severity || incident.priority || '').toLowerCase();
+    const stat = (incident.status || '').toLowerCase();
+    const bld = (incident.building || incident.location || '').toLowerCase();
+
+    return (
+      (severityFilter === 'all' || sev === severityFilter) &&
+      (statusFilter === 'all' || stat === statusFilter) &&
+      (buildingFilter === 'all' || bld.includes(buildingFilter))
+    );
+  });
+
+  const handleStatusChange = async (incidentId: string, newStatus: string) => {
+    setUpdatingId(incidentId);
+    try {
+      await updateIncidentStatus(incidentId, newStatus);
+      window.location.reload();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to update incident status.');
+    } finally {
+      setUpdatingId(null);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -36,7 +57,7 @@ export function ActiveIncidents() {
 
       {/* Filters */}
       <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-4">
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
             <Filter className="w-4 h-4 text-gray-400" />
             <span className="text-sm text-gray-400">Filter by:</span>
@@ -48,6 +69,7 @@ export function ActiveIncidents() {
             <SelectContent className="bg-[#0F1825] border-gray-800">
               <SelectItem value="all">All Severities</SelectItem>
               <SelectItem value="critical">Critical</SelectItem>
+              <SelectItem value="urgent">Urgent</SelectItem>
               <SelectItem value="high">High</SelectItem>
               <SelectItem value="medium">Medium</SelectItem>
               <SelectItem value="low">Low</SelectItem>
@@ -60,6 +82,7 @@ export function ActiveIncidents() {
             <SelectContent className="bg-[#0F1825] border-gray-800">
               <SelectItem value="all">All Status</SelectItem>
               <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
               <SelectItem value="assigned">Assigned</SelectItem>
               <SelectItem value="responding">Responding</SelectItem>
             </SelectContent>
@@ -82,10 +105,12 @@ export function ActiveIncidents() {
 
       {/* Incidents Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {filteredIncidents.map((incident) => (
+        {filteredIncidents.map((incident: any) => (
           <IncidentCard
             key={incident.id}
             incident={incident}
+            onStatusChange={handleStatusChange}
+            isUpdating={updatingId === incident.id}
           />
         ))}
       </div>

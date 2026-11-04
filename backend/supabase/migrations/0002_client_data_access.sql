@@ -130,4 +130,89 @@ BEGIN
 END;
 $$;
 
+ALTER TABLE public.responder
+    ADD COLUMN IF NOT EXISTS user_id bigint REFERENCES public."user"(user_id) ON DELETE SET NULL;
+
+GRANT UPDATE ON TABLE public.responder TO authenticated;
+GRANT UPDATE ON TABLE public.responder_notification TO authenticated;
+
+DROP POLICY IF EXISTS "Clinic staff read own responder profile" ON public.responder;
+CREATE POLICY "Clinic staff read own responder profile"
+    ON public.responder FOR SELECT TO authenticated
+    USING (
+        (auth.jwt() ->> 'app_role') = 'clinic_staff'
+        AND user_id::text = (auth.jwt() ->> 'sub')
+    );
+
+DROP POLICY IF EXISTS "Clinic staff update own availability" ON public.responder;
+CREATE POLICY "Clinic staff update own availability"
+    ON public.responder FOR UPDATE TO authenticated
+    USING (
+        (auth.jwt() ->> 'app_role') = 'clinic_staff'
+        AND user_id::text = (auth.jwt() ->> 'sub')
+    )
+    WITH CHECK (
+        (auth.jwt() ->> 'app_role') = 'clinic_staff'
+        AND user_id::text = (auth.jwt() ->> 'sub')
+    );
+
+DROP POLICY IF EXISTS "Clinic staff read own assignments" ON public.responder_notification;
+CREATE POLICY "Clinic staff read own assignments"
+    ON public.responder_notification FOR SELECT TO authenticated
+    USING (
+        (auth.jwt() ->> 'app_role') = 'clinic_staff'
+        AND EXISTS (
+            SELECT 1 FROM public.responder r
+            WHERE r.responders_id = responder_notification.responders_id
+              AND r.user_id::text = (auth.jwt() ->> 'sub')
+        )
+    );
+
+DROP POLICY IF EXISTS "Clinic staff update own assignments" ON public.responder_notification;
+CREATE POLICY "Clinic staff update own assignments"
+    ON public.responder_notification FOR UPDATE TO authenticated
+    USING (
+        (auth.jwt() ->> 'app_role') = 'clinic_staff'
+        AND EXISTS (
+            SELECT 1 FROM public.responder r
+            WHERE r.responders_id = responder_notification.responders_id
+              AND r.user_id::text = (auth.jwt() ->> 'sub')
+        )
+    )
+    WITH CHECK (
+        (auth.jwt() ->> 'app_role') = 'clinic_staff'
+        AND EXISTS (
+            SELECT 1 FROM public.responder r
+            WHERE r.responders_id = responder_notification.responders_id
+              AND r.user_id::text = (auth.jwt() ->> 'sub')
+        )
+    );
+
+DROP POLICY IF EXISTS "Clinic staff read assigned notifications" ON public.notification;
+CREATE POLICY "Clinic staff read assigned notifications"
+    ON public.notification FOR SELECT TO authenticated
+    USING (
+        (auth.jwt() ->> 'app_role') = 'clinic_staff'
+        AND EXISTS (
+            SELECT 1 FROM public.responder_notification rn
+            JOIN public.responder r ON r.responders_id = rn.responders_id
+            WHERE rn.notification_id = notification.notification_id
+              AND r.user_id::text = (auth.jwt() ->> 'sub')
+        )
+    );
+
+DROP POLICY IF EXISTS "Clinic staff read assigned incidents" ON public.incident;
+CREATE POLICY "Clinic staff read assigned incidents"
+    ON public.incident FOR SELECT TO authenticated
+    USING (
+        (auth.jwt() ->> 'app_role') = 'clinic_staff'
+        AND EXISTS (
+            SELECT 1 FROM public.notification n
+            JOIN public.responder_notification rn ON rn.notification_id = n.notification_id
+            JOIN public.responder r ON r.responders_id = rn.responders_id
+            WHERE n.incident_id = incident.incident_id
+              AND r.user_id::text = (auth.jwt() ->> 'sub')
+        )
+    );
+
 COMMIT;

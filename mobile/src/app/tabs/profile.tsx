@@ -1,58 +1,92 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { User, ShieldCheck, BookOpen, LogOut } from 'lucide-react-native';
 import { useAuth } from '../../auth/AuthContext';
-import { User, Mail, Shield, LogOut } from 'lucide-react-native';
+import { useTheme } from '../../context/ThemeContext';
 
 export default function ProfileScreen() {
   const { user, signOut } = useAuth();
+  const { isDark } = useTheme();
+  const [signingOut, setSigningOut] = useState(false);
+
+  const handleSignOut = async () => {
+    try {
+      setSigningOut(true);
+      await signOut();
+    } catch (error) {
+      Alert.alert('Sign Out Error', 'Could not clear your session. Please try again.');
+      setSigningOut(false);
+    }
+  };
+
+  const dynamicStyles = {
+    container: { backgroundColor: isDark ? '#060913' : '#f8fafc' },
+    card: { backgroundColor: isDark ? '#0f172a' : '#ffffff', borderColor: isDark ? '#1e293b' : '#e2e8f0' },
+    textMain: { color: isDark ? '#ffffff' : '#0f172a' },
+    textSub: { color: isDark ? '#94a3b8' : '#64748b' },
+  };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.headerTitle}>User Profile</Text>
-
-      <View style={styles.card}>
-        <View style={styles.avatarContainer}>
-          <User size={40} color="#FFFFFF" />
-        </View>
-
-        <View style={styles.infoRow}>
-          <User size={18} color="#9CA3AF" />
-          <Text style={styles.infoText}>
-            Username: <Text style={styles.infoValue}>{user?.username || 'N/A'}</Text>
-          </Text>
-        </View>    
-
-        <View style={styles.infoRow}>
-          <Mail size={18} color="#9CA3AF" />
-          <Text style={styles.infoText}>
-            Email: <Text style={styles.infoValue}>{user?.email || 'N/A'}</Text>
-          </Text>
-        </View>
-
-        <View style={styles.infoRow}>
-          <Shield size={18} color="#9CA3AF" />
-          <Text style={styles.infoText}>
-            Role: <Text style={styles.infoValue}>Administrator / Student</Text>
-          </Text>
+    <ScrollView contentContainerStyle={[styles.container, dynamicStyles.container]}>
+      <View style={styles.headerRow}>
+        <View>
+          <Text style={[styles.title, dynamicStyles.textMain]}>User Profile</Text>
+          <Text style={[styles.subtitle, dynamicStyles.textSub]}>Account settings & details</Text>
         </View>
       </View>
 
-      <TouchableOpacity style={styles.signOutButton} onPress={signOut}>
-        <LogOut size={18} color="#FFFFFF" />
-        <Text style={styles.signOutText}>Sign Out</Text>
+      <View style={[styles.profileCard, dynamicStyles.card]}>
+        <View style={styles.avatarBox}>
+          <User size={32} color="#3b82f6" />
+        </View>
+        <Text style={[styles.userName, dynamicStyles.textMain]}>{user?.username || 'User Profile'}</Text>
+        <Text style={styles.userRole}>Standard User / Student</Text>
+      </View>
+
+      <View style={[styles.sectionCard, dynamicStyles.card]}>
+        <View style={styles.infoRow}>
+          <ShieldCheck size={16} color="#38bdf8" />
+          <Text style={[styles.infoLabel, dynamicStyles.textSub]}>Username:</Text>
+          <Text style={[styles.infoValue, dynamicStyles.textMain]}>{user?.username || 'N/A'}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <BookOpen size={16} color="#38bdf8" />
+          <Text style={[styles.infoLabel, dynamicStyles.textSub]}>Role / Status:</Text>
+          <Text style={[styles.infoValue, dynamicStyles.textMain]}>Active Member</Text>
+        </View>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.signOutButton, signingOut && { opacity: 0.7 }]}
+        onPress={handleSignOut}
+        disabled={signingOut}
+      >
+        {signingOut ? (
+          <ActivityIndicator size="small" color="#ffffff" />
+        ) : (
+          <>
+            <LogOut size={16} color="#ffffff" />
+            <Text style={styles.signOutText}>Sign Out</Text>
+          </>
+        )}
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#080a0f', padding: 20, paddingTop: 60 },
-  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#FFFFFF', marginBottom: 20 },
-  card: { backgroundColor: '#0F1825', padding: 20, borderRadius: 12, borderWidth: 1, borderColor: '#1F2937', alignItems: 'center', marginBottom: 24 },
-  avatarContainer: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#3B82F6', alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
-  infoRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 12, marginBottom: 14 },
-  infoText: { color: '#9CA3AF', fontSize: 14 },
-  infoValue: { color: '#FFFFFF', fontWeight: '600' },
-  signOutButton: { flexDirection: 'row', backgroundColor: '#ef4444', padding: 14, borderRadius: 8, alignItems: 'center', justifyContent: 'center', gap: 8 },
-  signOutText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 16 },
+  container: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 40, paddingBottom: 40 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  title: { fontSize: 22, fontWeight: 'bold' },
+  subtitle: { fontSize: 12, marginTop: 2 },
+  profileCard: { borderWidth: 1, borderRadius: 16, padding: 24, alignItems: 'center', marginBottom: 16 },
+  avatarBox: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#3b82f620', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  userName: { fontSize: 18, fontWeight: 'bold' },
+  userRole: { color: '#3b82f6', fontSize: 12, fontWeight: '600', marginTop: 2 },
+  sectionCard: { borderWidth: 1, borderRadius: 16, padding: 16, gap: 14, marginBottom: 20 },
+  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  infoLabel: { fontSize: 13, width: 90 },
+  infoValue: { fontSize: 13, fontWeight: '600', flex: 1 },
+  signOutButton: { backgroundColor: '#ef4444', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 14, borderRadius: 12, gap: 8 },
+  signOutText: { color: '#ffffff', fontSize: 15, fontWeight: 'bold' },
 });

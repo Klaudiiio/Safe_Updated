@@ -21,8 +21,8 @@ def sync_user_to_supabase(user, profile):
     if not supabase_url or not service_role_key:
         raise SupabaseNotConfigured("Supabase URL or Service Role Key is not configured in Django settings.")
 
-    # Append on_conflict parameter so PostgREST knows how to handle upserts for the primary key
-    endpoint = f"{supabase_url}/rest/v1/{table_name}?on_conflict=user_id"
+    # Target username for conflict resolution since `user_username_key` is the unique constraint
+    endpoint = f"{supabase_url}/rest/v1/{table_name}?on_conflict=username"
    
     headers = {
         "apikey": service_role_key,
@@ -45,8 +45,12 @@ def sync_user_to_supabase(user, profile):
     try:
         response = requests.post(endpoint, json=payload, headers=headers, timeout=10)
         if response.status_code not in [200, 201, 204]:
-            logger.error("Supabase sync failed with status %s: %s", response.status_code, response.text)
-            raise SupabaseRequestFailed(f"Supabase returned status {response.status_code}: {response.text}")
+            # Treat 409 Conflict gracefully if it slips through
+            if response.status_code == 409:
+                logger.info("Supabase sync 409 conflict handled gracefully for username: %s", user.username)
+            else:
+                logger.error("Supabase sync failed with status %s: %s", response.status_code, response.text)
+                raise SupabaseRequestFailed(f"Supabase returned status {response.status_code}: {response.text}")
     except requests.exceptions.RequestException as e:
         logger.error("Network error while syncing user to Supabase: %s", str(e))
         raise SupabaseRequestFailed(f"Network error: {str(e)}")

@@ -1,121 +1,48 @@
-import { User, Phone, MessageSquare, MapPin } from 'lucide-react';
+import { Phone, Shield, User } from 'lucide-react';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
-import { Button } from './ui/button';
-import { Avatar, AvatarFallback } from './ui/avatar';
-import type { Responder } from '../data/mockData';
 
 interface ResponderCardProps {
-  responder: Responder;
-  onContact?: (responderId: string) => void;
-  onViewLocation?: (responderId: string) => void;
+  responder: any;
 }
 
-const statusConfig = {
-  available: {
-    color: 'bg-[#22C55E]/20 text-[#22C55E] border-[#22C55E]/50',
-    dotColor: 'bg-[#22C55E]',
-    label: 'Available'
-  },
-  assigned: {
-    color: 'bg-[#3B82F6]/20 text-[#3B82F6] border-[#3B82F6]/50',
-    dotColor: 'bg-[#3B82F6]',
-    label: 'Assigned'
-  },
-  responding: {
-    color: 'bg-[#FACC15]/20 text-[#FACC15] border-[#FACC15]/50',
-    dotColor: 'bg-[#FACC15]',
-    label: 'Responding'
-  },
-  offline: {
-    color: 'bg-gray-500/20 text-gray-400 border-gray-500/50',
-    dotColor: 'bg-gray-500',
-    label: 'Offline'
-  }
-};
+export function ResponderCard({ responder }: ResponderCardProps) {
+  const statusStr = (responder.status || responder.availability_status || 'available').toLowerCase();
+  const isAvailable = statusStr === 'available';
+  const isOffline = statusStr === 'offline';
 
-export function ResponderCard({ responder, onContact, onViewLocation }: ResponderCardProps) {
-  const status = statusConfig[responder.status];
-  const initials = responder.name.split(' ').map(n => n[0]).join('').toUpperCase();
+  const badgeColor = isAvailable
+    ? 'bg-green-500/20 text-green-400 border-green-500/30'
+    : isOffline
+    ? 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+    : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
 
   return (
-    <Card className="bg-[#0F1825]/50 backdrop-blur-sm border-gray-800 hover:border-[#3B82F6]/50 transition-all p-4">
-      <div className="space-y-4">
-        {/* Header */}
-        <div className="flex items-start gap-3">
-          <Avatar className="w-12 h-12 border-2 border-gray-700">
-            <AvatarFallback className="bg-gradient-to-br from-[#3B82F6] to-[#FF3B30] text-white font-semibold">
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex-1 min-w-0">
-            <h3 className="text-white font-semibold text-sm truncate">{responder.name}</h3>
-            <p className="text-gray-400 text-xs mt-0.5">{responder.role}</p>
-            <Badge className={`${status.color} border text-xs font-medium mt-2`}>
-              <div className={`w-1.5 h-1.5 rounded-full ${status.dotColor} ${responder.status !== 'offline' ? 'animate-pulse' : ''} mr-1.5`}></div>
-              {status.label}
-            </Badge>
+    <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-5 space-y-4 hover:border-gray-700 transition-all">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/30 flex items-center justify-center flex-shrink-0 text-blue-400">
+            <User className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-white font-semibold text-sm truncate">{responder.name || 'Unnamed Staff'}</h3>
+            <p className="text-xs text-blue-400 font-mono mt-0.5 truncate">{responder.department || 'Clinic Staff'}</p>
           </div>
         </div>
+        <Badge className={`${badgeColor} text-[10px] font-medium uppercase flex-shrink-0`}>
+          {statusStr}
+        </Badge>
+      </div>
 
-        {/* Assignment Info */}
-        {responder.assignedIncident && (
-          <div className="space-y-2">
-            <div className="p-2.5 bg-[#3B82F6]/10 rounded-lg border border-[#3B82F6]/30">
-              <div className="flex items-center gap-2 mb-1">
-                <User className="w-3.5 h-3.5 text-[#3B82F6]" />
-                <span className="text-xs text-gray-400">Assigned Incident:</span>
-              </div>
-              <p className="text-sm text-white font-medium">{responder.assignedIncident}</p>
-            </div>
-            {responder.eta && (
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-400">Estimated Time:</span>
-                <span className="text-[#FACC15] font-semibold">{responder.eta}</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Actions */}
-        {(onContact || onViewLocation) && (
-          <div className="flex gap-2">
-            {onContact && (
-              <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onContact(responder.id)}
-                  disabled={responder.status === 'offline'}
-                  className="flex-1 border-gray-700 text-gray-300 hover:text-white hover:bg-gray-800 disabled:opacity-50"
-                >
-                  <Phone className="w-3.5 h-3.5 mr-1.5" />
-                  Call
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onContact(responder.id)}
-                  disabled={responder.status === 'offline'}
-                  className="flex-1 border-gray-700 text-gray-300 hover:text-white hover:bg-gray-800 disabled:opacity-50"
-                >
-                  <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
-                  Message
-                </Button>
-              </>
-            )}
-            {onViewLocation && responder.status !== 'offline' && responder.status !== 'available' && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onViewLocation?.(responder.id)}
-              className="border-gray-700 text-gray-300 hover:text-white hover:bg-gray-800"
-            >
-              <MapPin className="w-3.5 h-3.5" />
-            </Button>
-            )}
-          </div>
-        )}
+      <div className="space-y-2 text-xs text-gray-300 pt-2 border-t border-gray-800/80">
+        <div className="flex items-center gap-2">
+          <Phone className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
+          <span className="truncate">{responder.contact_number || responder.phone || 'No contact provided'}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Shield className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
+          <span className="capitalize text-gray-400">Role: <strong className="text-white">{responder.user_type || 'Responder'}</strong></span>
+        </div>
       </div>
     </Card>
   );

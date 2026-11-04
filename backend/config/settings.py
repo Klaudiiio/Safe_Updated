@@ -1,9 +1,13 @@
 from pathlib import Path
 import os
 from datetime import timedelta
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables from the .env file in the backend root directory
+load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 # Quick-start development settings - unsuitable for production
 SECRET_KEY = 'django-insecure-safe-project-secret-key-change-me-later'
@@ -15,7 +19,7 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': False,
     'BLACKLIST_AFTER_ROTATION': True,
-    
+   
     'ALGORITHM': 'HS256',
 }
 
@@ -23,6 +27,14 @@ DEBUG = True
 
 # UPDATED: Guaranteed to include your specific local network IP and localhosts
 ALLOWED_HOSTS = ['*']
+
+# CORS settings for Vite frontend (Updated to include port 5175)
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+]
 
 # Application definition
 INSTALLED_APPS = [
@@ -35,11 +47,13 @@ INSTALLED_APPS = [
     # Third party apps
     'rest_framework',
     'rest_framework_simplejwt',
+    'corsheaders',
     # Local apps
     'accounts',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # <-- Must be as high as possible
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -115,7 +129,7 @@ REST_FRAMEWORK = {
     ],
 }
 
-# Supabase server credentials must be provided through the environment.
+# Supabase server credentials properly pulled from environment variables
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').rstrip('/')
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
 SUPABASE_USERS_TABLE = 'user'

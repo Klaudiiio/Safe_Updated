@@ -1,5 +1,5 @@
 import { lazy, Suspense, useMemo } from 'react';
-import { createBrowserRouter, RouterProvider } from 'react-router';
+import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import { DashboardLayout } from './components/DashboardLayout';
 import { ActiveIncidents } from './pages/ActiveIncidents';
 import { EmergencyReports } from './pages/EmergencyReports';

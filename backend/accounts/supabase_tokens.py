@@ -1,3 +1,4 @@
+import datetime
 import jwt
 from django.conf import settings
 
@@ -10,12 +11,13 @@ def create_supabase_access_token(user, profile):
     if not jwt_secret:
         raise SupabaseTokenNotConfigured("SUPABASE_JWT_SECRET is not configured in Django settings.")
 
-    # Mandatory claims required by Supabase RLS and GoTrue
+    # Mandatory claims required by Supabase RLS, GoTrue, and Realtime
     payload = {
         "sub": str(user.id),
         "aud": "authenticated",
         "role": "authenticated",
         "email": user.email,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=8),  # 👈 Added required expiration claim
         "user_metadata": {
             "username": user.username,
             "name": getattr(profile, 'name', ''),
