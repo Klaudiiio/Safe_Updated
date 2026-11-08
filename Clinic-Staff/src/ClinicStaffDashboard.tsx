@@ -37,25 +37,76 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/auth';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-async function supabaseRequest(path: string, options: RequestInit = {}) {
-  if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error('Supabase is not configured.');
-  const token = localStorage.getItem('clinic_staff_supabase_token');
-  if (!token) throw new Error('Your Supabase session is missing. Please sign in again.');
+async function refreshSupabaseToken(): Promise<string> {
+  const djangoAccessToken = localStorage.getItem('clinic_staff_access_token');
+  if (!djangoAccessToken) throw new Error('Django access token missing. Please sign in again.');
 
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...options,
+  const res = await fetch(`${API_BASE_URL}/token/supabase/`, {
+    method: 'POST',
     headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
-      Prefer: 'return=representation',
-      ...options.headers,
+      Authorization: `Bearer ${djangoAccessToken}`,
     },
   });
+
+  if (!res.ok) {
+    throw new Error('Failed to refresh Supabase access token.');
+  }
+
+  const data = await res.json();
+  const newToken = data.supabase_access_token;
+  if (!newToken) throw new Error('No Supabase token returned from server.');
+
+  localStorage.setItem('clinic_staff_supabase_token', newToken);
+  return newToken;
+}
+
+async function supabaseRequest(path: string, options: RequestInit = {}): Promise<any> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error('Supabase is not configured.');
+  
+  let token = localStorage.getItem('clinic_staff_supabase_token');
+  if (!token) {
+    token = await refreshSupabaseToken();
+  }
+
+  const executeFetch = async (authToken: string) => {
+    return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      ...options,
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+        ...options.headers,
+      },
+    });
+  };
+
+  let response = await executeFetch(token);
+
+  // If JWT expired (401 / PGRST303), refresh token once and retry
+  if (response.status === 401) {
+    try {
+      const freshToken = await refreshSupabaseToken();
+      response = await executeFetch(freshToken);
+    } catch (refreshErr) {
+      throw new Error('Your session has expired. Please sign in again.');
+    }
+  }
+
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(body || `Supabase request failed (${response.status}).`);
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.message === 'JWT expired' || parsed.code === 'PGRST303') {
+        throw new Error('Supabase JWT expired.');
+      }
+      throw new Error(parsed.message || body);
+    } catch (e) {
+      throw new Error(body || `Supabase request failed (${response.status}).`);
+    }
   }
+
   return response.status === 204 ? null : response.json();
 }
 
@@ -67,6 +118,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const [mobileMenu, setMobileMenu] = useState(false);
   const [currentTab, setCurrentTab] = useState<'dashboard' | 'assignments' | 'accepted' | 'schedule'>('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   // Add Responder or Staff Modal State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -87,14 +139,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     setLoading(true);
     setError('');
     try {
-      const profile = await fetch(`${API_BASE_URL}/token/supabase/`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('clinic_staff_access_token')}`,
-        },
-      });
-      if (!profile.ok) throw new Error('Unable to verify the clinic staff session.');
-
       const incidentsData = await supabaseRequest('incident?select=*&order=reported_at.desc');
       setIncidents(incidentsData as IncidentReport[]);
     } catch (loadError) {
@@ -110,7 +154,8 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
     async function fetchStaffStatus() {
       try {
-        const data = await supabaseRequest(`responder?select=availability_status&name=eq.${encodeURIComponent(displayName ?? '')}`);
+        // Use ilike for case-insensitive matching in Supabase
+        const data = await supabaseRequest(`responder?select=availability_status&name=ilike.${encodeURIComponent(displayName ?? '')}`);
         if (data && data.length > 0 && data[0].availability_status) {
           setAvailability(data[0].availability_status.toLowerCase());
         }
@@ -127,23 +172,19 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     setError('');
 
     try {
-      console.log(`Attempting to update status to '${status}' for user '${displayName}'...`);
-
+      // Use ilike for case-insensitive matching on PATCH updates
       const response = await supabaseRequest(
-        `responder?name=eq.${encodeURIComponent(displayName ?? '')}`,
+        `responder?name=ilike.${encodeURIComponent(displayName ?? '')}`,
         {
           method: 'PATCH',
           body: JSON.stringify({ availability_status: status }),
         }
       );
 
-      console.log('Supabase PATCH response:', response);
-
       if (Array.isArray(response) && response.length === 0) {
         throw new Error(`Database update failed: No responder row found matching name "${displayName}".`);
       }
     } catch (err) {
-      console.error(`Failed to update status to '${status}':`, err);
       setAvailability(previousStatus); // Revert UI if it failed
       setError(err instanceof Error ? err.message : 'Failed to update availability status in Supabase.');
     }
@@ -212,8 +253,8 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }
   };
 
-  const activeIncidents = incidents.filter((row) => !['completed', 'resolved', 'cancelled'].includes(row.status?.toLowerCase()));
-  
+  const activeIncidents = incidents.filter((row) => !['completed', 'resolved', 'cancelled'].includes(row.status?.toLowerCase() ?? ''));
+ 
   const acceptedIncidents = incidents.filter((row) => {
     const s = row.status?.toLowerCase() ?? '';
     return !['completed', 'resolved', 'cancelled'].includes(s);
@@ -269,7 +310,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
           <button className="mr-3 lg:hidden" onClick={() => setMobileMenu(!mobileMenu)} aria-label="Toggle menu"><Menu /></button>
           <div className="relative hidden max-w-md flex-1 md:block"><Search className="absolute left-3 top-2.5 text-slate-400" size={18} /><input className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-cyan-500" placeholder="Search incidents, patients..." /></div>
           <div className="ml-auto flex items-center gap-4">
-            
+           
             <div className="relative">
               <button
                 onClick={() => setShowNotifications(!showNotifications)}
@@ -315,13 +356,49 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               )}
             </div>
 
-            <div className="flex items-center gap-3 border-l border-slate-200 pl-4"><div className="grid h-9 w-9 place-items-center rounded-full bg-cyan-100 text-sm font-bold text-cyan-700">{initials}</div><div className="hidden sm:block"><p className="text-sm font-semibold">{displayName}</p><p className="text-xs text-slate-500">Clinic Staff</p></div></div>
+            {/* Clickable Profile Menu / Logout Dropdown */}
+            <div className="relative border-l border-slate-200 pl-4">
+              <button
+                onClick={() => setShowProfileMenu(!showProfileMenu)}
+                className="flex items-center gap-3 cursor-pointer group focus:outline-none"
+                aria-label="Profile menu"
+              >
+                <div className="grid h-9 w-9 place-items-center rounded-full bg-cyan-100 text-sm font-bold text-cyan-700 group-hover:bg-cyan-200 transition-colors">
+                  {initials}
+                </div>
+                <div className="hidden sm:block text-left">
+                  <p className="text-sm font-semibold group-hover:text-cyan-600 transition-colors">{displayName}</p>
+                  <p className="text-xs text-slate-500">Clinic Staff</p>
+                </div>
+              </button>
+
+              {showProfileMenu && (
+                <div className="absolute right-0 mt-2 w-56 rounded-xl border border-slate-200 bg-white shadow-lg z-50 p-2">
+                  <div className="border-b border-slate-100 pb-2 px-3 pt-1">
+                    <p className="font-bold text-sm text-slate-800">{displayName}</p>
+                    <p className="text-xs text-slate-500">Clinic Staff Portal</p>
+                  </div>
+                  <div className="pt-2">
+                    <button
+                      onClick={() => {
+                        setShowProfileMenu(false);
+                        onLogout();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                    >
+                      <LogOut size={16} /> Sign out
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
           </div>
         </header>
 
         <main className="mx-auto max-w-[1400px] p-5 lg:p-8">
           <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-            <div><p className="text-sm text-slate-500">Tuesday, November 4, 2026</p><h1 className="mt-1 text-2xl font-bold">Good morning, {displayName}</h1><p className="mt-1 text-sm text-slate-500">Here is your clinic activity overview.</p></div>
+            <div><p className="text-sm text-slate-500">Sunday, November 8, 2026</p><h1 className="mt-1 text-2xl font-bold">Good morning, {displayName}</h1><p className="mt-1 text-sm text-slate-500">Here is your clinic activity overview.</p></div>
             <div className="flex rounded-lg border border-slate-200 bg-white p-1">
               {['available', 'busy', 'offline'].map((status) => (
                 <button
@@ -425,7 +502,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                         <span className="flex items-center gap-1"><Clock3 size={13} />{incident.reported_at ? new Date(incident.reported_at).toLocaleString() : 'Recently reported'}</span>
                       </div>
                     </div>
-                    
+                   
                     <div className="flex items-center gap-2">
                       <label className="text-xs font-semibold uppercase text-slate-500">Status:</label>
                       <select
@@ -563,24 +640,22 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="rounded-lg border border-slate-700 px-4 py-2.5 text-sm font-semibold text-slate-300 hover:bg-white/5"
+                  className="rounded-lg px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-white/5 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submittingStaff}
-                  className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
+                  className="rounded-lg bg-cyan-600 px-5 py-2 text-sm font-semibold text-white hover:bg-cyan-700 disabled:opacity-50 transition-colors"
                 >
-                  {submittingStaff ? 'Saving...' : 'Save Responder'}
+                  {submittingStaff ? 'Creating...' : 'Create Account'}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
-
-      {mobileMenu && <button aria-label="Close menu overlay" className="fixed inset-0 z-30 bg-slate-950/40 lg:hidden" onClick={() => setMobileMenu(false)} />}
     </div>
   );
 }

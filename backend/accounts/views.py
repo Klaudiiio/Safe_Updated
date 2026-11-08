@@ -6,6 +6,8 @@ from django.contrib.auth.models import User
 from rest_framework.views import APIView
 from django.conf import settings
 import requests
+import time
+import random
 
 from .serializers import AuthTokenSerializer, RegisterSerializer
 from .supabase_tokens import SupabaseTokenNotConfigured, create_supabase_access_token
@@ -18,14 +20,12 @@ class LoginView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
        
-        # If login was successful, grab the user and sync to Supabase
         if response.status_code == 200:
             username = request.data.get("username")
             try:
                 user = User.objects.get(username=username)
                 profile = user.profile
                
-                # Attempt to sync profile to Supabase
                 sync_user_to_supabase(user, profile)
                 response.data["supabase_synced"] = True
                 response.data["sync_warning"] = None
@@ -98,7 +98,6 @@ class RegisterView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
-        # Explicitly sync user to Supabase upon registration
         supabase_synced = True
         sync_warning = None
         try:
@@ -142,6 +141,99 @@ class RegisterView(generics.CreateAPIView):
         }, status=201)
 
 
+class CreateUserView(APIView):
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request):
+        name = request.data.get('name')
+        username = request.data.get('username')
+        password = request.data.get('password')
+        course = request.data.get('course')
+        phone_number = request.data.get('phone_number')
+        user_type = request.data.get('user_type', 'user')
+        student_id = request.data.get('student_id')
+        email = request.data.get('email') or f"{username.lower().replace(' ', '')}@campus.edu"
+
+        if not username or not password or not name:
+            return Response({"error": "Name, username, and password are required fields."}, status=400)
+
+        if len(password.strip()) < 6:
+            return Response({"error": "Password must be at least 6 characters long."}, status=400)
+
+        if User.objects.filter(username=username).exists() or User.objects.filter(email=email).exists():
+            return Response({"error": "Username or email already exists."}, status=400)
+
+        try:
+            user = User.objects.create(
+                username=username,
+                email=email,
+            )
+            user.set_password(password)
+            
+            if hasattr(user, 'profile'):
+                user.profile.name = name
+                user.profile.phone_number = phone_number
+                user.profile.role = user_type.lower()
+                user.profile.save()
+            user.save()
+
+            supabase_synced = True
+            sync_warning = None
+            supabase_url = getattr(settings, 'SUPABASE_URL', None)
+            service_key = getattr(settings, 'SUPABASE_SERVICE_ROLE_KEY', None)
+
+            if supabase_url and service_key:
+                try:
+                    headers = {
+                        "apikey": service_key,
+                        "Authorization": f"Bearer {service_key}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=representation"
+                    }
+                    random_suffix = random.randint(1000, 9999)
+                    payload = {
+                        "user_id": int(time.time()),
+                        "name": name,
+                        "username": username,
+                        "course": course or "General",
+                        "phone_number": phone_number or "",
+                        "user_type": user_type.lower(),
+                        "student_id": student_id or f"ID-{random_suffix}"
+                    }
+
+                    res = requests.post(
+                        f"{supabase_url.rstrip('/')}/rest/v1/user",
+                        json=payload,
+                        headers=headers,
+                        timeout=10
+                    )
+
+                    if res.status_code >= 400:
+                        res = requests.post(
+                            f"{supabase_url.rstrip('/')}/rest/v1/users",
+                            json=payload,
+                            headers=headers,
+                            timeout=10
+                        )
+
+                    if res.status_code >= 400:
+                        supabase_synced = False
+                        sync_warning = f"Supabase User Table Error [{res.status_code}]: {res.text}"
+                except Exception as sub_exc:
+                    supabase_synced = False
+                    sync_warning = str(sub_exc)
+
+            return Response({
+                "message": f"User '{username}' created successfully.",
+                "user_id": user.id,
+                "supabase_synced": supabase_synced,
+                "sync_warning": sync_warning
+            }, status=201)
+
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=500)
+
+
 class CreateClinicStaffView(APIView):
     permission_classes = [permissions.IsAdminUser]
 
@@ -168,7 +260,6 @@ class CreateClinicStaffView(APIView):
             return Response({"error": "Username or email already exists."}, status=400)
 
         try:
-            # 1. Create Django user and profile locally
             user = User.objects.create(
                 username=username,
                 email=email,
@@ -183,7 +274,6 @@ class CreateClinicStaffView(APIView):
                 user.profile.save()
             user.save()
 
-            # 2. Sync to Supabase
             supabase_synced = True
             sync_warning = None
             supabase_url = getattr(settings, 'SUPABASE_URL', None)
@@ -191,10 +281,8 @@ class CreateClinicStaffView(APIView):
            
             if supabase_url and service_key:
                 try:
-                    # Step A: Sync to base user table
                     sync_user_to_supabase(user, user.profile)
 
-                    # Step B: Insert into responder table using correct schema columns (user_type instead of user_id)
                     headers = {
                         "apikey": service_key,
                         "Authorization": f"Bearer {service_key}",
@@ -242,3 +330,69 @@ class CreateClinicStaffView(APIView):
 
         except Exception as exc:
             return Response({"error": str(exc)}, status=500)
+
+
+class IncidentListView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        supabase_url = getattr(settings, 'SUPABASE_URL', None)
+        service_key = getattr(settings, 'SUPABASE_SERVICE_ROLE_KEY', None)
+
+        if not supabase_url or not service_key:
+            return Response({"error": "Supabase configuration missing on server."}, status=500)
+
+        headers = {
+            "apikey": service_key,
+            "Authorization": f"Bearer {service_key}",
+            "Content-Type": "application/json",
+        }
+
+        user_id = request.user.id
+
+        try:
+            res = requests.get(
+                f"{supabase_url.rstrip('/')}/rest/v1/incident?select=*,incident_types(incident_name)&user_id=eq.{user_id}&order=reported_at.desc",
+                headers=headers,
+                timeout=10
+            )
+            if res.status_code >= 400:
+                res = requests.get(
+                    f"{supabase_url.rstrip('/')}/rest/v1/incidents?select=*&user_id=eq.{user_id}&order=reported_at.desc",
+                    headers=headers,
+                    timeout=10
+                )
+
+            if res.status_code >= 400:
+                res = requests.get(
+                    f"{supabase_url.rstrip('/')}/rest/v1/incident?select=*&user_id=eq.{user_id}",
+                    headers=headers,
+                    timeout=10
+                )
+
+            if res.status_code >= 400:
+                return Response({"error": f"Supabase error: {res.text}"}, status=res.status_code)
+
+            raw_data = res.json()
+           
+            formatted_results = []
+            for item in raw_data:
+                incident_type_name = "Incident"
+                if isinstance(item.get('incident_types'), dict):
+                    incident_type_name = item['incident_types'].get('incident_name', 'Incident')
+                elif item.get('incident_type'):
+                    incident_type_name = item.get('incident_type')
+
+                formatted_results.append({
+                    "id": item.get('incident_id') or item.get('id'),
+                    "incident_type": incident_type_name,
+                    "description": item.get('description', ''),
+                    "location": item.get('location_description') or item.get('location') or 'Campus Area',
+                    "status": item.get('status', 'Pending'),
+                    "reported_at": item.get('reported_at') or item.get('created_at'),
+                })
+
+            return Response(formatted_results)
+        except Exception as e:
+            print("❌ SUPABASE INCIDENT FETCH ERROR:", str(e))
+            return Response({"error": str(e)}, status=500)

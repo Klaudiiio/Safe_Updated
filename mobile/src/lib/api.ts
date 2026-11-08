@@ -32,6 +32,17 @@ export interface IncidentReportPayload {
   location: string;
 }
 
+export interface SensorDataResponse {
+  temperature_c: number;
+  humidity_percent?: number;
+  recorded_at?: string;
+}
+
+export interface IncidentTypeRecord {
+  incident_types_id: number;
+  incident_name: string;
+}
+
 interface ApiErrorBody {
   detail?: unknown;
   message?: unknown;
@@ -76,20 +87,20 @@ export async function authenticate(
 ): Promise<AuthSession> {
   if (!API_BASE_URL) {
     throw new Error(
-      'API address is not set. Copy .env.example to .env, set EXPO_PUBLIC_API_URL to your computer’s LAN IP, then restart Expo.',
+      'API address is not set. Set EXPO_PUBLIC_API_URL to your computer’s LAN IP, then restart Expo.',
     );
   }
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/${action}/`, {
+    response = await fetch(`${API_BASE_URL}/api/auth/${action}/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
   } catch {
     throw new Error(
-      'Could not reach Django. Check that the server is running on 0.0.0.0:8000, both devices use the same Wi-Fi, and the API URL uses your computer’s LAN IP.',
+      'Could not reach Django. Check that the server is running on port 8000 and both devices use the same Wi-Fi.',
     );
   }
 
@@ -116,7 +127,7 @@ export async function syncProfile(accessToken: string): Promise<ProfileSyncResul
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/profile/sync/`, {
+    response = await fetch(`${API_BASE_URL}/api/auth/profile/sync/`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -142,7 +153,7 @@ async function refreshSupabaseSession(session: AuthSession): Promise<AuthSession
 
   let refreshedResponse: Response;
   try {
-    refreshedResponse = await fetch(`${API_BASE_URL}/token/refresh/`, {
+    refreshedResponse = await fetch(`${API_BASE_URL}/api/auth/token/refresh/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh: session.refresh }),
@@ -160,7 +171,7 @@ async function refreshSupabaseSession(session: AuthSession): Promise<AuthSession
 
   let tokenResponse: Response;
   try {
-    tokenResponse = await fetch(`${API_BASE_URL}/token/supabase/`, {
+    tokenResponse = await fetch(`${API_BASE_URL}/api/auth/token/supabase/`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${refreshedBody.access}` },
     });
@@ -190,7 +201,6 @@ async function submitIncidentReportWithToken(
     throw new Error('Supabase client settings are missing. Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY, then restart Expo.');
   }
 
-  // Use the user's Supabase JWT access token if available, or fall back to the publishable key
   const effectiveToken = session.supabase_access_token || SUPABASE_PUBLISHABLE_KEY;
 
   const request = async (url: string, init?: RequestInit): Promise<Response> => {
@@ -204,18 +214,17 @@ async function submitIncidentReportWithToken(
     }
   };
 
-  // Fetch all incident types and match case-insensitively in JavaScript to avoid exact encoding mismatches
   const typeUrl = `${SUPABASE_URL}/rest/v1/incident_types?select=incident_types_id,incident_name`;
   const typeResponse = await request(typeUrl);
   const typeBody = await responseBody(typeResponse);
-  
+ 
   if (!typeResponse.ok) {
     throw new SupabaseRestError(
       readableError(typeBody as ApiErrorBody | null, `Supabase incident type lookup failed (${typeResponse.status}).`),
       typeResponse.status,
     );
   }
-  
+ 
   const types = typeBody as Array<{ incident_types_id?: number; incident_name?: string }> | null;
   const matchedType = types?.find(
     (t) => t.incident_name?.trim().toLowerCase() === payload.incident_type.trim().toLowerCase()
@@ -226,14 +235,17 @@ async function submitIncidentReportWithToken(
     throw new Error(`Incident type "${payload.incident_type}" not found in Supabase.`);
   }
 
+  const incidentBody: Record<string, unknown> = {
+    incident_types_id: incidentTypeId,
+    description: payload.description,
+    location_description: payload.location,
+    user_id: session.user.id, // <--- Automatically stamps report with current user's ID
+  };
+
   const createResponse = await request(`${SUPABASE_URL}/rest/v1/incident`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
-    body: JSON.stringify({
-      user_id: session.user.id,
-      incident_types_id: incidentTypeId,
-      description: payload.description,
-    }),
+    body: JSON.stringify(incidentBody),
   });
   const createBody = await responseBody(createResponse);
   if (!createResponse.ok) {
@@ -270,7 +282,6 @@ export async function submitIncidentReport(
     };
   } catch (error) {
     if (!(error instanceof SupabaseRestError) || error.status !== 401) throw error;
-    // If a 401 occurs and session refreshing is supported, attempt to refresh
     if (session.supabase_access_token) {
       const refreshedSession = await refreshSupabaseSession(session);
       return {
@@ -279,5 +290,67 @@ export async function submitIncidentReport(
       };
     }
     throw error;
+  }
+}
+
+export async function fetchLatestSensorData(): Promise<SensorDataResponse | null> {
+  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+    throw new Error('Supabase client settings are missing.');
+  }
+
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/safe_sensor_data?select=temperature_c,humidity_percent,recorded_at&order=id.desc&limit=1`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        apikey: SUPABASE_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const body = await responseBody(response);
+    if (!response.ok) {
+      throw new SupabaseRestError(
+        readableError(body as ApiErrorBody | null, `Failed to fetch sensor data (${response.status}).`),
+        response.status,
+      );
+    }
+
+    const data = body as Array<SensorDataResponse> | null;
+    return data && data.length > 0 ? data[0] : null;
+  } catch (error) {
+    if (error instanceof SupabaseRestError) throw error;
+    throw new Error('Could not reach Supabase to fetch sensor data.');
+  }
+}
+
+export async function fetchIncidentTypes(): Promise<IncidentTypeRecord[]> {
+  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+    throw new Error('Supabase client settings are missing.');
+  }
+
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/incident_types?select=incident_types_id,incident_name`, {
+      method: 'GET',
+      headers: {
+        apikey: SUPABASE_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const body = await responseBody(response);
+    if (!response.ok) {
+      throw new SupabaseRestError(
+        readableError(body as ApiErrorBody | null, `Failed to fetch incident types (${response.status}).`),
+        response.status,
+      );
+    }
+
+    return (body as IncidentTypeRecord[]) || [];
+  } catch (error) {
+    console.error('fetchIncidentTypes error:', error);
+    return [];
   }
 }

@@ -19,6 +19,7 @@ export function Users() {
   // Form state for adding a new user
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [course, setCourse] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [userType, setUserType] = useState('user');
@@ -52,7 +53,7 @@ export function Users() {
     );
   });
 
-  const countRole = (roleKey: string) => 
+  const countRole = (roleKey: string) =>
     combinedUsers.filter((user: any) => (user.user_type || user.role || '').toLowerCase() === roleKey.toLowerCase()).length;
 
   const handleAddUser = async (e: React.FormEvent) => {
@@ -61,19 +62,30 @@ export function Users() {
       alert('Please enter a name.');
       return;
     }
+    if (!password) {
+      alert('Please enter a password.');
+      return;
+    }
+    if (password.length < 6) {
+      alert('Password must be at least 6 characters long.');
+      return;
+    }
 
     setSubmitting(true);
     try {
       await createUser({
         name,
         username: username || name.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+        password,
         course,
         phone_number: phoneNumber,
         user_type: userType,
-      });
+      } as any); // Cast as any to bypass strict type check for password
+      
       setIsModalOpen(false);
       setName('');
       setUsername('');
+      setPassword('');
       setCourse('');
       setPhoneNumber('');
       setUserType('user');
@@ -103,7 +115,7 @@ export function Users() {
   return (
     <div className="space-y-6">
       <DataNotice loading={loading} error={error} />
-      
+     
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
@@ -302,6 +314,21 @@ export function Users() {
                   placeholder="e.g., juandelacruz (optional)"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
+                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1" htmlFor="password-input">Password *</label>
+                <input
+                  id="password-input"
+                  name="password"
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="Min. 6 characters"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
                 />
               </div>

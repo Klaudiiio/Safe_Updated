@@ -29,6 +29,7 @@ interface AuthContextValue {
   syncWarning: string | null;
   syncProfile: () => Promise<void>;
   submitIncidentReport: (payload: IncidentReportPayload) => Promise<IncidentReportResponse>;
+  submitEmergencyReport: () => Promise<IncidentReportResponse>;
   signIn: (username: string, password: string) => Promise<void>;
   signUp: (payload: Record<string, string>) => Promise<void>;
   signOut: () => Promise<void>;
@@ -95,6 +96,21 @@ export function AuthProvider({ children }: PropsWithChildren) {
     return result.report;
   }, [session, saveSession]);
 
+  // Dedicated helper for the quick emergency button
+  const submitEmergencyReport = useCallback(async () => {
+    if (!session) throw new Error('Sign in before submitting an emergency report.');
+
+    const emergencyPayload: IncidentReportPayload = {
+      incident_type: 'emergency',
+      location: 'Building 9 3rd Floor',
+      description: 'Immediate emergency needed',
+    };
+
+    const result = await submitIncidentReportRequest(session, emergencyPayload);
+    if (result.session !== session) await saveSession(result.session);
+    return result.report;
+  }, [session, saveSession]);
+
   // Updated signOut: Always resets session state to trigger navigation back to Login
   const signOut = useCallback(async () => {
     try {
@@ -118,10 +134,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
       : null,
     syncProfile,
     submitIncidentReport,
+    submitEmergencyReport,
     signIn,
     signUp,
     signOut,
-  }), [session, loading, storageError, signIn, signUp, signOut, syncProfile, submitIncidentReport]);
+  }), [session, loading, storageError, signIn, signUp, signOut, syncProfile, submitIncidentReport, submitEmergencyReport]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -5,7 +5,9 @@ from .views import (
     RegisterView,
     SupabaseTokenView,
     SyncProfileView,
-    CreateClinicStaffView
+    CreateClinicStaffView,
+    CreateUserView,
+    IncidentListView,
 )
 
 urlpatterns = [
@@ -15,4 +17,6 @@ urlpatterns = [
     path('token/supabase/', SupabaseTokenView.as_view(), name='supabase-token'),
     path('profile/sync/', SyncProfileView.as_view(), name='profile-sync'),
     path('clinic-staff/create/', CreateClinicStaffView.as_view(), name='clinic-staff-create'),
+    path('users/create/', CreateUserView.as_view(), name='user-create'),
+    path('incidents/', IncidentListView.as_view(), name='incident-list'),
 ]

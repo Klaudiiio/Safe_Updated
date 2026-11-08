@@ -32,10 +32,13 @@ class AuthTokenSerializer(TokenObtainPairSerializer):
             data['supabase_access_token'] = create_supabase_access_token(self.user, profile)
         except SupabaseTokenNotConfigured:
             data['supabase_access_token'] = None
+            
+        # FIXED: Added 'name' so the frontend profile card correctly displays the user's full name
         data['user'] = {
             'id': self.user.id,
             'username': self.user.username,
             'email': self.user.email,
+            'name': profile.name,
             'role': profile.role,
         }
         return data
@@ -71,20 +74,20 @@ class RegisterSerializer(serializers.ModelSerializer):
         profile.student_id = student_id
         profile.course = course
         profile.phone_number = phone_number
-        profile.save()
 
         try:
             sync_user_to_supabase(user, profile)
-            user.supabase_synced = True
+            profile.supabase_synced = True
+            profile.supabase_sync_warning = None
         except (SupabaseNotConfigured, SupabaseRequestFailed) as exc:
             logger.warning(
                 'User %s was created locally but Supabase sync failed: %s',
                 user.pk,
                 str(exc),
             )
-            user.supabase_synced = False
-            user.supabase_sync_warning = str(exc)
-        else:
-            user.supabase_sync_warning = None
+            profile.supabase_synced = False
+            profile.supabase_sync_warning = str(exc)
+
+        profile.save()
 
         return user

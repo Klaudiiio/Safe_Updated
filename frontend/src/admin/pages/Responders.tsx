@@ -19,16 +19,15 @@ export function Responders() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // Form state for new responder/staff (including email & password for login)
+  // Form state for new clinic staff member
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [department, setDepartment] = useState('');
   const [contactNumber, setContactNumber] = useState('');
   const [availabilityStatus, setAvailabilityStatus] = useState('available');
-  const [userType, setUserType] = useState('responder');
 
-  // Fetch responders directly from Supabase so there is zero backend lag or stale cache
+  // Fetch responders/staff directly from Supabase
   const fetchRespondersDirectly = async () => {
     if (!supabase) return;
     try {
@@ -37,7 +36,7 @@ export function Responders() {
       if (error) throw error;
       setResponders(data || []);
     } catch (err: any) {
-      setError(err.message || 'Failed to load responders');
+      setError(err.message || 'Failed to load clinic staff');
     } finally {
       setLoading(false);
     }
@@ -55,7 +54,7 @@ export function Responders() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'responder' },
         () => {
-          void fetchRespondersDirectly(); // Refetches seamlessly in the background without a page reload
+          void fetchRespondersDirectly();
         }
       )
       .subscribe();
@@ -77,18 +76,21 @@ export function Responders() {
       return;
     }
 
+    // Automatically generate clean username from full name input
+    const generatedUsername = name.trim().toLowerCase().replace(/[^a-z0-9]/g, '') || email.split('@')[0];
+
     setSubmitting(true);
     try {
       await createResponder({
-        username: email.split('@')[0],
+        username: generatedUsername,
         email,
         password,
         name,
         department,
         contact_number: contactNumber,
         availability_status: availabilityStatus,
-        user_type: userType,
-        role: userType,
+        user_type: 'clinic_staff', // Hardcoded strictly to clinic_staff
+        role: 'clinic_staff',       // Hardcoded strictly to clinic_staff
       });
       setIsModalOpen(false);
       setName('');
@@ -97,10 +99,9 @@ export function Responders() {
       setDepartment('');
       setContactNumber('');
       setAvailabilityStatus('available');
-      setUserType('responder');
       void fetchRespondersDirectly();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to create responder or staff member.');
+      alert(err instanceof Error ? err.message : 'Failed to create clinic staff member.');
     } finally {
       setSubmitting(false);
     }
@@ -110,8 +111,7 @@ export function Responders() {
   const getStatus = (r: any) => {
     const raw = r.status || r.availability_status || 'available';
     const val = String(raw).trim().toLowerCase();
-    
-    // Normalize any variation of busy/on-duty to 'busy'
+   
     if (['busy', 'on_duty', 'assigned', 'responding', 'on-call'].includes(val)) {
       return 'busy';
     }
@@ -129,15 +129,15 @@ export function Responders() {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white mb-1">Medical Responders & Clinic Staff</h1>
-          <p className="text-gray-400 text-sm">Manage emergency response team and staff availability</p>
+          <h1 className="text-2xl font-bold text-white mb-1">Clinic Staff Directory</h1>
+          <p className="text-gray-400 text-sm">Manage clinic personnel and staff availability</p>
         </div>
         <Button
           onClick={() => setIsModalOpen(true)}
           className="bg-[#3B82F6] hover:bg-blue-600 text-white flex items-center gap-2 w-fit shadow-md shadow-blue-500/10 text-xs"
         >
           <UserPlus className="w-4 h-4" />
-          Add Responder / Staff
+          Add Clinic Staff
         </Button>
       </div>
 
@@ -184,16 +184,15 @@ export function Responders() {
         </Card>
       </div>
 
-      {/* Responders by Status */}
+      {/* Staff by Status */}
       <div className="space-y-6">
-        {/* Available Responders */}
         <div>
           <div className="flex items-center gap-3 mb-4">
             <Badge className="bg-[#22C55E]/20 text-[#22C55E] border-[#22C55E]/50">
               <div className="w-2 h-2 bg-[#22C55E] rounded-full animate-pulse mr-2"></div>
               Available
             </Badge>
-            <span className="text-sm text-gray-400">{availableCount} responders ready</span>
+            <span className="text-sm text-gray-400">{availableCount} staff ready</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {responders
@@ -204,14 +203,13 @@ export function Responders() {
           </div>
         </div>
 
-        {/* Busy Responders */}
         <div>
           <div className="flex items-center gap-3 mb-4">
             <Badge className="bg-[#FACC15]/20 text-[#FACC15] border-[#FACC15]/50">
               <div className="w-2 h-2 bg-[#FACC15] rounded-full animate-pulse mr-2"></div>
               Busy
             </Badge>
-            <span className="text-sm text-gray-400">{assignedCount} responders active</span>
+            <span className="text-sm text-gray-400">{assignedCount} staff active</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {responders
@@ -222,14 +220,13 @@ export function Responders() {
           </div>
         </div>
 
-        {/* Offline Responders */}
         <div>
           <div className="flex items-center gap-3 mb-4">
             <Badge className="bg-gray-500/20 text-gray-400 border-gray-500/50">
               <div className="w-2 h-2 bg-gray-500 rounded-full mr-2"></div>
               Offline
             </Badge>
-            <span className="text-sm text-gray-400">{offlineCount} responders offline</span>
+            <span className="text-sm text-gray-400">{offlineCount} staff offline</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {responders
@@ -244,16 +241,16 @@ export function Responders() {
       {!loading && responders.length === 0 && (
         <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 py-12 text-center text-gray-400">
           <AlertCircle className="w-12 h-12 mx-auto mb-3 text-gray-600 stroke-1" />
-          <p className="text-base font-medium">No medical responders or staff registered yet.</p>
+          <p className="text-base font-medium">No clinic staff registered yet.</p>
         </Card>
       )}
 
-      {/* Add Responder Modal Form */}
+      {/* Add Clinic Staff Modal Form */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
           <Card className="bg-[#0F1825] border-gray-800 w-full max-w-lg p-6 space-y-6 relative shadow-2xl">
             <div className="flex items-center justify-between border-b border-gray-800 pb-4">
-              <h2 className="text-lg font-bold text-white">Add New Responder or Staff</h2>
+              <h2 className="text-lg font-bold text-white">Add New Clinic Staff</h2>
               <button
                 onClick={() => setIsModalOpen(false)}
                 className="text-gray-400 hover:text-white transition-colors"
@@ -325,31 +322,17 @@ export function Responders() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1">Initial Status</label>
-                  <select
-                    value={availabilityStatus}
-                    onChange={(e) => setAvailabilityStatus(e.target.value)}
-                    className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
-                  >
-                    <option value="available">Available</option>
-                    <option value="busy">Busy</option>
-                    <option value="offline">Offline</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1">Role Type</label>
-                  <select
-                    value={userType}
-                    onChange={(e) => setUserType(e.target.value)}
-                    className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
-                  >
-                    <option value="responder">Responder</option>
-                    <option value="clinic_staff">Clinic Staff</option>
-                  </select>
-                </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">Initial Status</label>
+                <select
+                  value={availabilityStatus}
+                  onChange={(e) => setAvailabilityStatus(e.target.value)}
+                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                >
+                  <option value="available">Available</option>
+                  <option value="busy">Busy</option>
+                  <option value="offline">Offline</option>
+                </select>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-800">
@@ -367,7 +350,7 @@ export function Responders() {
                   className="bg-[#3B82F6] hover:bg-blue-600 text-white text-xs flex items-center gap-2"
                 >
                   {submitting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                  Save Responder
+                  Save Clinic Staff
                 </Button>
               </div>
             </form>

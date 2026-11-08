@@ -335,49 +335,38 @@ export async function createResponder(responderData: {
 export async function createUser(userData: {
   name: string;
   username: string;
+  password: string;
   course?: string;
   phone_number?: string;
   user_type?: string;
   student_id?: string;
+  email?: string;
 }): Promise<void> {
-  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
-    throw new Error('Supabase client settings are missing.');
+  const token = localStorage.getItem('access_token') || localStorage.getItem('clinic_staff_access_token');
+  if (!token) {
+    throw new Error('Admin access token is missing. Please sign in again.');
   }
-  let token = localStorage.getItem('supabase_access_token');
-  if (!token) throw new Error('Supabase access token is missing.');
 
-  const headers = {
-    apikey: SUPABASE_PUBLISHABLE_KEY,
-    'Content-Type': 'application/json',
-    'Prefer': 'return=representation',
-  };
+  const response = await fetch(`${API_BASE_URL}/users/create/`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      username: userData.username,
+      password: userData.password,
+      name: userData.name,
+      course: userData.course,
+      phone_number: userData.phone_number,
+      user_type: userData.user_type || 'user',
+      student_id: userData.student_id,
+      email: userData.email || `${userData.username.toLowerCase().replace(/[^a-z0-9]/g, '')}@campus.edu`,
+    }),
+  });
 
-  const requestPost = async (accessToken: string) => {
-    const uniqueUserId = Math.floor(Date.now() / 1000);
-    const randomSuffix = Math.floor(Math.random() * 9000) + 1000;
-
-    return await fetch(`${SUPABASE_URL}/rest/v1/user`, {
-      method: 'POST',
-      headers: { ...headers, Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify({
-        user_id: uniqueUserId,
-        name: userData.name,
-        username: userData.username || userData.name.toLowerCase().replace(/[^a-z0-9_]/g, '_') + '_' + randomSuffix,
-        course: userData.course || 'General',
-        phone_number: userData.phone_number || '',
-        user_type: userData.user_type || 'user',
-        student_id: userData.student_id || `ID-${randomSuffix}`,
-      }),
-    });
-  };
-
-  let response = await requestPost(token);
-  if (response.status === 401) {
-    token = await refreshSupabaseAccessToken();
-    response = await requestPost(token);
-  }
-  const body = await response.json().catch(() => null);
   if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
     throw new Error(errorMessage(body, `Failed to create user (${response.status}).`));
   }
 }

@@ -19,16 +19,18 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': False,
     'BLACKLIST_AFTER_ROTATION': True,
-   
+    'AUTH_HEADER_TYPES': ('Bearer',),
     'ALGORITHM': 'HS256',
 }
 
 DEBUG = True
 
-# UPDATED: Guaranteed to include your specific local network IP and localhosts
+# Allowed to accept connections from any local device/network IP
 ALLOWED_HOSTS = ['*']
 
-# CORS settings for Vite frontend (Updated to include port 5175)
+# CORS settings for React/Vite frontends and local mobile clients
+CORS_ALLOW_ALL_ORIGINS = True  # Makes local testing from mobile devices seamless
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5174",
     "http://127.0.0.1:5174",

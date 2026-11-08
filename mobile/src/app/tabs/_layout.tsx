@@ -79,6 +79,7 @@ export default function TabLayout() {
         name="history"
         options={{
           title: 'History',
+          headerShown: false, // Hidden header for History tab
           tabBarIcon: ({ color, size }) => <History size={size} color={color} />,
         }}
       />
@@ -86,6 +87,7 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: 'Profile',
+          headerShown: false, // Hidden header for Profile tab
           tabBarIcon: ({ color, size }) => <User size={size} color={color} />,
         }}
       />
