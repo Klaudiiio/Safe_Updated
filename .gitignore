@@ -13,11 +13,7 @@
 *.py[cod]
 backend/venv/
 
-# local configuration and databases
-.env
-.env.*
-!.env.example
-backend/db.sqlite3
+
 
 # logs and OS files
 *.log

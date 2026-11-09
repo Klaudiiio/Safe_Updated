@@ -16,14 +16,15 @@ export function ActiveIncidents() {
   const [buildingFilter, setBuildingFilter] = useState('all');
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
-  const filteredIncidents = activeIncidents.filter((incident: any) => {
+  const filteredIncidents = incidents.filter((incident: any) => {
     const sev = (incident.severity || incident.priority || '').toLowerCase();
     const stat = (incident.status || '').toLowerCase();
+    const normalizedStat = stat === 'responding' ? 'assigned' : stat;
     const bld = (incident.building || incident.location || '').toLowerCase();
 
     return (
       (severityFilter === 'all' || sev === severityFilter) &&
-      (statusFilter === 'all' || stat === statusFilter) &&
+      (statusFilter === 'all' || normalizedStat === statusFilter) &&
       (buildingFilter === 'all' || bld.includes(buildingFilter))
     );
   });
@@ -84,7 +85,7 @@ export function ActiveIncidents() {
               <SelectItem value="pending">Pending</SelectItem>
               <SelectItem value="active">Active</SelectItem>
               <SelectItem value="assigned">Assigned</SelectItem>
-              <SelectItem value="responding">Responding</SelectItem>
+              <SelectItem value="resolved">Resolved</SelectItem>
             </SelectContent>
           </Select>
           <Select value={buildingFilter} onValueChange={setBuildingFilter}>

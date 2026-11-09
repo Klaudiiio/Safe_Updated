@@ -10,15 +10,50 @@ export function IncidentLogs() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
-  // Use incidents as the primary record source if logs array is empty
-  const dataSource = logs.length > 0 ? logs : incidents;
+  // Build and synchronize logs directly by matching logs with live incidents or falling back to incident array
+  const dataSource = useMemo(() => {
+    const rawSource = logs && logs.length > 0 ? logs : incidents;
 
-  // Filter logs or incidents based on search and status
+    return rawSource.map((item: any, index: number) => {
+      // Find matching live incident by id or incidentId
+      const logIncId = String(item.incidentId || item.id || item.incident_id || '');
+      const matchingIncident = incidents.find((inc: any) => 
+        String(inc.id) === logIncId || 
+        String((inc as any).incident_id) === logIncId ||
+        String(inc.id) === String(index + 1)
+      );
+
+      // Extract status from matching live incident first, then fallback to log item status
+      const rawStatus = String(matchingIncident?.status || item.status || 'PENDING').toLowerCase();
+      
+      let normalizedStatus = 'PENDING';
+      if (['resolved', 'completed'].includes(rawStatus)) {
+        normalizedStatus = 'RESOLVED';
+      } else if (['assigned', 'accepted', 'responding'].includes(rawStatus)) {
+        normalizedStatus = 'ASSIGNED';
+      } else if (rawStatus === 'active') {
+        normalizedStatus = 'ACTIVE';
+      } else if (rawStatus === 'pending') {
+        normalizedStatus = 'PENDING';
+      }
+
+      return {
+        id: item.id || index + 1,
+        incidentId: logIncId || matchingIncident?.id || index + 1,
+        action: item.action || (matchingIncident?.description ? `Incident reported: ${matchingIncident.description}` : `Incident reported: ${matchingIncident?.type || item.type || 'Emergency'}`),
+        reporter: item.responder || item.reporter || (matchingIncident as any)?.callerName || 'System',
+        timestamp: item.timestamp || item.time || (matchingIncident as any)?.reportedAt || item.date || 'Today',
+        status: normalizedStatus,
+      };
+    });
+  }, [incidents, logs]);
+
+  // Filter logs based on search and status
   const filteredLogs = useMemo(() => {
     return dataSource.filter((item: any) => {
-      const idStr = String(item.incidentId || item.id || '');
-      const actionStr = String(item.action || item.type || '');
-      const reporterStr = String(item.responder || item.reporter || '');
+      const idStr = String(item.incidentId || '');
+      const actionStr = String(item.action || '');
+      const reporterStr = String(item.reporter || '');
       const statusStr = String(item.status || '');
 
       const matchesSearch =
@@ -38,7 +73,7 @@ export function IncidentLogs() {
   // Statistics summaries
   const totalIncidents = incidents.length;
   const resolvedIncidents = incidents.filter(
-    (i: any) => i.status?.toUpperCase() === 'RESOLVED'
+    (i: any) => ['resolved', 'completed'].includes(i.status?.toLowerCase())
   ).length;
 
   const mostCommonType = useMemo(() => {
@@ -55,24 +90,17 @@ export function IncidentLogs() {
   const handleExportCSV = () => {
     if (!filteredLogs.length) return;
 
-    const headers = ['Log ID', 'Incident ID', 'Action / Type', 'Timestamp', 'Responder / Reporter', 'Status'];
+    const headers = ['Log ID', 'Incident ID', 'Action / Description', 'Timestamp', 'Reporter', 'Status'];
     const csvRows = [
       headers.join(','),
       ...filteredLogs.map((item: any) => {
-        const logId = item.id || '';
-        const incId = item.incidentId || item.id || '';
-        const action = item.action || item.type || '';
-        const timestamp = item.timestamp || `${item.date || ''} ${item.time || ''}`.trim();
-        const responder = item.responder || item.reporter || '';
-        const status = item.status || '';
-
         return [
-          `"${logId}"`,
-          `"${incId}"`,
-          `"${action}"`,
-          `"${timestamp}"`,
-          `"${responder}"`,
-          `"${status}"`,
+          `"${item.id}"`,
+          `"${item.incidentId}"`,
+          `"${item.action}"`,
+          `"${item.timestamp}"`,
+          `"${item.reporter}"`,
+          `"${item.status}"`,
         ].join(',');
       }),
     ];
@@ -131,6 +159,7 @@ export function IncidentLogs() {
               <option value="ALL">All Status</option>
               <option value="PENDING">Pending</option>
               <option value="ACTIVE">Active</option>
+              <option value="ASSIGNED">Assigned</option>
               <option value="RESOLVED">Resolved</option>
             </select>
           </div>
@@ -155,28 +184,27 @@ export function IncidentLogs() {
                 const statusStr = (item.status || 'PENDING').toUpperCase();
                 const isResolved = statusStr === 'RESOLVED';
                 const isPending = statusStr === 'PENDING';
-                const logId = item.incidentId || item.id || index;
-                const actionText = item.action || `Incident reported: ${item.type}`;
-                const reporterText = item.responder || item.reporter || 'System';
-                const timestampText = item.timestamp || `${item.date || 'Today'} ${item.time || ''}`.trim();
+                const isAssigned = statusStr === 'ASSIGNED';
 
                 return (
-                  <tr key={`${logId}-${index}`} className="hover:bg-[#0B1220]/40 transition-colors">
+                  <tr key={`${item.incidentId}-${index}`} className="hover:bg-[#0B1220]/40 transition-colors">
                     <td className="px-6 py-4 font-mono text-xs text-blue-400 font-medium">
-                      #{logId}
+                      #{item.incidentId}
                     </td>
                     <td className="px-6 py-4 font-medium text-white max-w-xs truncate">
-                      {actionText}
+                      {item.action}
                     </td>
-                    <td className="px-6 py-4 text-gray-400">{reporterText}</td>
+                    <td className="px-6 py-4 text-gray-400">{item.reporter}</td>
                     <td className="px-6 py-4 text-gray-400 text-xs whitespace-nowrap">
-                      {timestampText}
+                      {item.timestamp}
                     </td>
                     <td className="px-6 py-4">
                       <Badge
                         className={
                           isResolved
                             ? 'bg-green-500/20 text-green-400 border-green-500/30'
+                            : isAssigned
+                            ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
                             : isPending
                             ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
                             : 'bg-red-500/20 text-red-400 border-red-500/30'
@@ -188,18 +216,19 @@ export function IncidentLogs() {
                   </tr>
                 );
               })}
+              {!loading && filteredLogs.length === 0 && (
+                <tr className="hover:bg-transparent">
+                  <td colSpan={5} className="py-12 text-center text-gray-400">
+                    <FileText className="w-12 h-12 mx-auto mb-3 text-gray-600 stroke-1" />
+                    <p className="text-base font-medium">No matching incident logs.</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      New mobile submissions will populate here automatically.
+                    </p>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
-
-          {!loading && filteredLogs.length === 0 && (
-            <div className="py-12 text-center text-gray-400">
-              <FileText className="w-12 h-12 mx-auto mb-3 text-gray-600 stroke-1" />
-              <p className="text-base font-medium">No matching incident logs.</p>
-              <p className="text-xs text-gray-500 mt-1">
-                New mobile submissions will populate here automatically.
-              </p>
-            </div>
-          )}
         </div>
       </Card>
 

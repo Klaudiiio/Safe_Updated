@@ -11,7 +11,7 @@ import { useAdminData } from '../useAdminData';
 import { createUser, deleteUser } from '../api';
 
 export function Users() {
-  const { users, responders, loading, error } = useAdminData();
+  const { users, loading, error } = useAdminData();
   const [search, setSearch] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -24,21 +24,13 @@ export function Users() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [userType, setUserType] = useState('user');
 
-  // Combine users and responders data so clinic staff/responders automatically appear here
-  const combinedUsers = [
-    ...users,
-    ...responders.map((r: any) => ({
-      user_id: `resp-${r.responders_id || r.id}`,
-      name: r.name,
-      username: r.name ? r.name.toLowerCase().replace(/[^a-z0-9_]/g, '_') : 'staff',
-      user_type: r.user_type || 'clinic_staff',
-      course: r.department || 'Clinic Staff',
-      status: r.availability_status || 'Active',
-      isResponder: true,
-    }))
-  ];
+  // Filter ONLY standard users (exclude clinic staff, responders, and admins from this table)
+  const standardUsers = users.filter((u: any) => {
+    const role = (u.user_type || u.role || 'user').toLowerCase();
+    return role === 'user' || role === 'student' || (!['admin', 'clinic_staff', 'responder', 'staff'].includes(role));
+  });
 
-  const matchingUsers = combinedUsers.filter((user: any) => {
+  const matchingUsers = standardUsers.filter((user: any) => {
     const userName = user.name || '';
     const userHandle = user.username || '';
     const role = user.user_type || user.role || '';
@@ -52,9 +44,6 @@ export function Users() {
       dept.toLowerCase().includes(query)
     );
   });
-
-  const countRole = (roleKey: string) =>
-    combinedUsers.filter((user: any) => (user.user_type || user.role || '').toLowerCase() === roleKey.toLowerCase()).length;
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,7 +69,7 @@ export function Users() {
         course,
         phone_number: phoneNumber,
         user_type: userType,
-      } as any); // Cast as any to bypass strict type check for password
+      } as any);
       
       setIsModalOpen(false);
       setName('');
@@ -98,10 +87,6 @@ export function Users() {
   };
 
   const handleDelete = async (userId: string | number) => {
-    if (String(userId).startsWith('resp-')) {
-      alert('Responders/Staff can be managed under the Responders tab.');
-      return;
-    }
     if (!window.confirm('Are you sure you want to delete this user?')) return;
 
     try {
@@ -120,7 +105,7 @@ export function Users() {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white mb-1">User Management</h1>
-          <p className="text-gray-400 text-sm">Add, manage, and remove users and staff</p>
+          <p className="text-gray-400 text-sm">Add, manage, and remove standard platform users</p>
         </div>
         <Button
           onClick={() => setIsModalOpen(true)}
@@ -132,12 +117,12 @@ export function Users() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-5">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Total Directory</p>
-              <p className="text-3xl font-bold text-white">{combinedUsers.length}</p>
+              <p className="text-gray-400 text-sm mb-1">Total Users</p>
+              <p className="text-3xl font-bold text-white">{standardUsers.length}</p>
             </div>
             <UsersRound className="w-8 h-8 text-gray-400" />
           </div>
@@ -146,8 +131,8 @@ export function Users() {
         <Card className="bg-gradient-to-br from-[#3B82F6]/20 to-[#3B82F6]/5 border-[#3B82F6]/30 p-5">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Students / Users</p>
-              <p className="text-3xl font-bold text-white">{countRole('user')}</p>
+              <p className="text-gray-400 text-sm mb-1">Students / Standard Users</p>
+              <p className="text-3xl font-bold text-white">{standardUsers.length}</p>
             </div>
             <UsersRound className="w-8 h-8 text-[#3B82F6]" />
           </div>
@@ -156,20 +141,12 @@ export function Users() {
         <Card className="bg-gradient-to-br from-[#22C55E]/20 to-[#22C55E]/5 border-[#22C55E]/30 p-5">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Clinic Staff</p>
-              <p className="text-3xl font-bold text-white">{countRole('clinic_staff') + countRole('responder')}</p>
+              <p className="text-gray-400 text-sm mb-1">Active Status</p>
+              <p className="text-3xl font-bold text-white">
+                {standardUsers.filter((u: any) => (u.status || 'active').toLowerCase() === 'active').length}
+              </p>
             </div>
             <UsersRound className="w-8 h-8 text-[#22C55E]" />
-          </div>
-        </Card>
-
-        <Card className="bg-gradient-to-br from-[#FACC15]/20 to-[#FACC15]/5 border-[#FACC15]/30 p-5">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-gray-400 text-sm mb-1">Administrators</p>
-              <p className="text-3xl font-bold text-white">{countRole('admin')}</p>
-            </div>
-            <UsersRound className="w-8 h-8 text-[#FACC15]" />
           </div>
         </Card>
       </div>
@@ -182,7 +159,7 @@ export function Users() {
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search users by name, username, course, or role..."
+            placeholder="Search users by name, username, course..."
             className="pl-10 bg-[#0B1220] border-gray-800 text-white placeholder:text-gray-500 text-xs"
           />
         </div>
@@ -227,15 +204,7 @@ export function Users() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        className={
-                          role.toLowerCase() === 'clinic_staff' || role.toLowerCase() === 'responder'
-                            ? 'bg-[#22C55E]/20 text-[#22C55E] border-[#22C55E]/50'
-                            : role.toLowerCase() === 'admin'
-                            ? 'bg-[#3B82F6]/20 text-[#3B82F6] border-[#3B82F6]/50'
-                            : 'bg-gray-500/20 text-gray-400 border-gray-500/50'
-                        }
-                      >
+                      <Badge className="bg-gray-500/20 text-gray-400 border-gray-500/50">
                         {role}
                       </Badge>
                     </TableCell>
@@ -249,17 +218,13 @@ export function Users() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {!user.isResponder ? (
-                        <button
-                          onClick={() => handleDelete(userId)}
-                          className="text-red-400 hover:text-red-300 p-1.5 bg-red-500/10 hover:bg-red-500/20 rounded-lg transition-colors cursor-pointer"
-                          title="Delete User"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      ) : (
-                        <span className="text-gray-500 text-xs">Staff record</span>
-                      )}
+                      <button
+                        onClick={() => handleDelete(userId)}
+                        className="text-red-400 hover:text-red-300 p-1.5 bg-red-500/10 hover:bg-red-500/20 rounded-lg transition-colors cursor-pointer"
+                        title="Delete User"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </TableCell>
                   </TableRow>
                 );
@@ -369,8 +334,6 @@ export function Users() {
                   className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
                 >
                   <option value="user">User / Student</option>
-                  <option value="clinic_staff">Clinic Staff</option>
-                  <option value="admin">Administrator</option>
                 </select>
               </div>
 

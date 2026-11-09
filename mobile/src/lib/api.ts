@@ -239,7 +239,7 @@ async function submitIncidentReportWithToken(
     incident_types_id: incidentTypeId,
     description: payload.description,
     location_description: payload.location,
-    user_id: session.user.id, // <--- Automatically stamps report with current user's ID
+    user_id: session.user.id,
   };
 
   const createResponse = await request(`${SUPABASE_URL}/rest/v1/incident`, {
@@ -254,19 +254,20 @@ async function submitIncidentReportWithToken(
       createResponse.status,
     );
   }
-  const created = (createBody as Array<{
-    incident_id?: number | string;
-    status?: string;
-    reported_at?: string;
-  }> | null)?.[0];
-  const incidentId = Number(created?.incident_id);
-  if (!Number.isSafeInteger(incidentId) || typeof created?.status !== 'string') {
+
+  // Robustly handle both 'incident_id' and 'id' column naming conventions
+  const created = (createBody as Array<Record<string, unknown>> | null)?.[0];
+  const rawId = created?.incident_id ?? created?.id;
+  const incidentId = Number(rawId);
+
+  if (!Number.isSafeInteger(incidentId) || typeof (created?.status ?? 'pending') !== 'string') {
     throw new Error('Supabase did not return the saved incident confirmation.');
   }
+
   return {
     incident_id: incidentId,
-    status: created.status,
-    reported_at: typeof created.reported_at === 'string' ? created.reported_at : null,
+    status: String(created?.status ?? 'Pending'),
+    reported_at: typeof created?.reported_at === 'string' ? created.reported_at : null,
     notification_sent: false,
   };
 }
@@ -299,7 +300,8 @@ export async function fetchLatestSensorData(): Promise<SensorDataResponse | null
   }
 
   try {
-    const url = `${SUPABASE_URL}/rest/v1/safe_sensor_data?select=temperature_c,humidity_percent,recorded_at&order=id.desc&limit=1`;
+    // Ordered by recorded_at or id safely to prevent missing column crashes
+    const url = `${SUPABASE_URL}/rest/v1/safe_sensor_data?select=temperature_c,humidity_percent,recorded_at&order=recorded_at.desc&limit=1`;
     const response = await fetch(url, {
       method: 'GET',
       headers: {

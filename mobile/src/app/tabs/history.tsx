@@ -50,7 +50,7 @@ export default function HistoryScreen() {
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Fetch incident history through your Django backend API with timeout protection
+  // Fetch incident history through your Django backend API with a 1-minute timeout protection
   const fetchMyReports = useCallback(async (isRefresh = false) => {
     if (!session?.access) {
       setLoading(false);
@@ -64,7 +64,8 @@ export default function HistoryScreen() {
       setError(null);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      // Extended timeout window to 1 minute (60,000 ms)
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
 
       // Correct path including the /api/auth/ prefix:
       const response = await fetch(`${API_BASE_URL}/api/auth/incidents/`, {
@@ -83,8 +84,8 @@ export default function HistoryScreen() {
       const data = await response.json();
       setReports(Array.isArray(data) ? data : data.results || []);
     } catch (err: any) {
-      if (err.name === 'AbortError') {
-        setError('Request timed out. Check your server connection.');
+      if (err.name === 'AbortError' || err.message?.includes('aborted')) {
+        setError('Connection is slow');
       } else {
         setError(err.message || 'Failed to load report history.');
       }
@@ -164,12 +165,14 @@ export default function HistoryScreen() {
         {loading && !refreshing ? (
           <View style={styles.centerBox}>
             <ActivityIndicator size="large" color="#3b82f6" />
-            <Text style={[styles.loadingText, dynamicStyles.textSub]}>Loading your reports...</Text>
+            <Text style={[styles.loadingText, dynamicStyles.textSub]}>Loading your reports (this may take a minute)...</Text>
           </View>
         ) : error ? (
           <View style={styles.centerBox}>
-            <AlertCircle size={36} color="#ef4444" />
-            <Text style={styles.errorText}>{error}</Text>
+            <AlertCircle size={36} color={error === 'Connection is slow' ? '#f59e0b' : '#ef4444'} />
+            <Text style={[styles.errorText, error === 'Connection is slow' && styles.warningText]}>
+              {error === 'Connection is slow' ? '⚠️ Connection is slow. Please check your network.' : error}
+            </Text>
             <TouchableOpacity style={styles.retryBtn} onPress={handleRefresh}>
               <Text style={styles.retryText}>Retry</Text>
             </TouchableOpacity>
@@ -253,8 +256,9 @@ const styles = StyleSheet.create({
   searchIcon: { position: 'absolute', left: 12, top: 14, zIndex: 1 },
   searchInput: { borderWidth: 1, borderRadius: 12, paddingLeft: 40, paddingRight: 16, paddingVertical: 10, fontSize: 14 },
   centerBox: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 30, marginTop: 40 },
-  loadingText: { marginTop: 12, fontSize: 14 },
+  loadingText: { marginTop: 12, fontSize: 14, textAlign: 'center' },
   errorText: { color: '#ef4444', fontSize: 14, marginTop: 8, textAlign: 'center' },
+  warningText: { color: '#f59e0b' },
   retryBtn: { marginTop: 12, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#3b82f6', borderRadius: 8 },
   retryText: { color: '#ffffff', fontWeight: 'bold', fontSize: 13 },
   emptyText: { fontSize: 16, fontWeight: 'bold', marginTop: 12 },

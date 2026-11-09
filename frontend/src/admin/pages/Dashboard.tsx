@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Activity, AlertCircle, Users, Clock, TrendingUp, MapPin, Camera, Radio } from 'lucide-react';
+import { Activity, AlertCircle, Users, TrendingUp, MapPin, Camera, Radio, ClipboardList } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { IncidentCard } from '../components/IncidentCard';
@@ -24,11 +24,25 @@ function buildDailyIncidentCounts(incidents: Incident[], currentDate: Date) {
 export function Dashboard() {
   const { incidents, responders, loading, error } = useAdminData();
   const [currentDate] = useState(() => new Date());
-  const activeIncidents = incidents.filter(i => i.status !== 'resolved');
+
+  // Map any legacy 'responding' status to 'assigned'
+  const normalizedIncidents = incidents.map(i => ({
+    ...i,
+    status: i.status?.toLowerCase() === 'responding' ? 'assigned' : i.status
+  }));
+
+  // Exclude resolved/completed/cancelled from active incidents
+  const activeIncidents = normalizedIncidents.filter(i => {
+    const status = i.status?.toLowerCase() || '';
+    return !['resolved', 'completed', 'cancelled'].includes(status);
+  });
+
   const availableResponders = responders.filter(r => r.status === 'available');
-  const pendingReports = incidents.filter(i => i.status === 'pending').length;
-  const dailyIncidents = buildDailyIncidentCounts(incidents, currentDate);
-  const incidentTypeCounts = incidents.reduce<{ type: string; count: number }[]>((counts, incident) => {
+  const pendingReports = normalizedIncidents.filter(i => (i.status?.toLowerCase() || '') === 'pending').length;
+  const assignedReports = normalizedIncidents.filter(i => ['assigned', 'accepted'].includes(i.status?.toLowerCase() || '')).length;
+  
+  const dailyIncidents = buildDailyIncidentCounts(normalizedIncidents, currentDate);
+  const incidentTypeCounts = normalizedIncidents.reduce<{ type: string; count: number }[]>((counts, incident) => {
     const existing = counts.find((item) => item.type === incident.type);
     if (existing) existing.count += 1;
     else counts.push({ type: incident.type, count: 1 });
@@ -75,12 +89,12 @@ export function Dashboard() {
         <Card className="bg-gradient-to-br from-[#3B82F6]/20 to-[#3B82F6]/5 border-[#3B82F6]/30 p-5">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Response Time Data</p>
-              <p className="text-3xl font-bold text-white">Not tracked</p>
-              <p className="text-[#3B82F6] text-xs mt-2 font-medium">No response timestamps</p>
+              <p className="text-gray-400 text-sm mb-1">Assigned Cases</p>
+              <p className="text-3xl font-bold text-white">{assignedReports}</p>
+              <p className="text-[#3B82F6] text-xs mt-2 font-medium">Under Management</p>
             </div>
             <div className="w-12 h-12 bg-[#3B82F6]/20 rounded-lg flex items-center justify-center">
-              <Clock className="w-6 h-6 text-[#3B82F6]" />
+              <ClipboardList className="w-6 h-6 text-[#3B82F6]" />
             </div>
           </div>
         </Card>

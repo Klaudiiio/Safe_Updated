@@ -51,12 +51,12 @@ const DEFAULT_SEVERITY = {
   label: 'Urgent',
 };
 
-export function IncidentCard({ 
-  incident, 
-  onAssignResponder, 
-  onViewDetails, 
+export function IncidentCard({
+  incident,
+  onAssignResponder,
+  onViewDetails,
   onStatusChange,
-  isUpdating = false 
+  isUpdating = false
 }: IncidentCardProps) {
   const sevKey = (incident.severity || incident.priority || 'urgent').toLowerCase();
   const severity = severityConfig[sevKey] || DEFAULT_SEVERITY;
@@ -92,14 +92,13 @@ export function IncidentCard({
               {isUpdating && <RefreshCw className="w-3 h-3 text-blue-400 animate-spin" />}
               <select
                 disabled={isUpdating}
-                value={(incident.status || 'pending').toLowerCase()}
+                value={(incident.status || 'pending').toLowerCase() === 'responding' ? 'assigned' : (incident.status || 'pending').toLowerCase()}
                 onChange={(e) => onStatusChange?.(incident.id, e.target.value)}
                 className="bg-transparent text-xs text-white focus:outline-none cursor-pointer disabled:opacity-50"
               >
                 <option value="pending" className="bg-[#0B1220]">Pending</option>
                 <option value="active" className="bg-[#0B1220]">Active</option>
                 <option value="assigned" className="bg-[#0B1220]">Assigned</option>
-                <option value="responding" className="bg-[#0B1220]">Responding</option>
                 <option value="resolved" className="bg-[#0B1220]">Resolved</option>
               </select>
             </div>

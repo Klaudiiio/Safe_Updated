@@ -11,13 +11,12 @@ import {
   LogOut,
   MapPin,
   Menu,
-  PlusCircle,
   Search,
   Stethoscope,
-  X,
   CheckCheck,
+  ShieldAlert,
+  CheckCircle,
 } from 'lucide-react';
-import { createClinicStaff } from './services/authServices';
 
 interface StaffDashboardProps {
   displayName: string;
@@ -120,21 +119,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
-  // Add Responder or Staff Modal State
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [newStaffData, setNewStaffData] = useState({
-    name: '',
-    email: '',
-    password: '',
-    department: '',
-    contact_number: '',
-    availability_status: 'available',
-    role: 'Responder',
-  });
-  const [submittingStaff, setSubmittingStaff] = useState(false);
-  const [modalError, setModalError] = useState('');
-  const [modalSuccess, setModalSuccess] = useState('');
-
   const loadIncidents = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -154,7 +138,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
     async function fetchStaffStatus() {
       try {
-        // Use ilike for case-insensitive matching in Supabase
         const data = await supabaseRequest(`responder?select=availability_status&name=ilike.${encodeURIComponent(displayName ?? '')}`);
         if (data && data.length > 0 && data[0].availability_status) {
           setAvailability(data[0].availability_status.toLowerCase());
@@ -168,11 +151,10 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
   const updateAvailability = async (status: string) => {
     const previousStatus = availability;
-    setAvailability(status); // Optimistic UI update
+    setAvailability(status);
     setError('');
 
     try {
-      // Use ilike for case-insensitive matching on PATCH updates
       const response = await supabaseRequest(
         `responder?name=ilike.${encodeURIComponent(displayName ?? '')}`,
         {
@@ -182,10 +164,17 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       );
 
       if (Array.isArray(response) && response.length === 0) {
-        throw new Error(`Database update failed: No responder row found matching name "${displayName}".`);
+        await supabaseRequest(`responder`, {
+          method: 'POST',
+          body: JSON.stringify({
+            name: displayName,
+            availability_status: status,
+            user_type: 'responder',
+          }),
+        });
       }
     } catch (err) {
-      setAvailability(previousStatus); // Revert UI if it failed
+      setAvailability(previousStatus);
       setError(err instanceof Error ? err.message : 'Failed to update availability status in Supabase.');
     }
   };
@@ -202,62 +191,20 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }
   };
 
-  const handleCreateStaffSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setModalError('');
-    setModalSuccess('');
+  // Case-insensitive status breakdown calculations
+  const pendingCount = incidents.filter((row) => (row.status?.toLowerCase() ?? 'pending') === 'pending').length;
+  const activeCount = incidents.filter((row) => (row.status?.toLowerCase() ?? '') === 'active').length;
+  const assignedCount = incidents.filter((row) => ['assigned', 'accepted', 'responding'].includes(row.status?.toLowerCase() ?? '')).length;
+  const resolvedCount = incidents.filter((row) => ['resolved', 'completed'].includes(row.status?.toLowerCase() ?? '')).length;
 
-    if (!newStaffData.name || !newStaffData.email || !newStaffData.password || !newStaffData.department || !newStaffData.contact_number) {
-      setModalError('Please fill out all required fields including password.');
-      return;
-    }
-
-    if (newStaffData.password.length < 6) {
-      setModalError('Password must be at least 6 characters long.');
-      return;
-    }
-
-    setSubmittingStaff(true);
-    try {
-      const adminToken = localStorage.getItem('clinic_staff_access_token') || '';
-      await createClinicStaff({
-        username: newStaffData.email.split('@')[0],
-        email: newStaffData.email,
-        name: newStaffData.name,
-        password: newStaffData.password,
-        department: newStaffData.department,
-        contact_number: newStaffData.contact_number,
-        availability_status: newStaffData.availability_status,
-        role: newStaffData.role,
-      }, adminToken);
-
-      setModalSuccess(`Successfully created account for '${newStaffData.name}' with login credentials!`);
-      setNewStaffData({
-        name: '',
-        email: '',
-        password: '',
-        department: '',
-        contact_number: '',
-        availability_status: 'available',
-        role: 'Responder',
-      });
-      await loadIncidents();
-      setTimeout(() => {
-        setShowAddModal(false);
-        setModalSuccess('');
-      }, 2000);
-    } catch (err: any) {
-      setModalError(err.message || 'Failed to create responder or staff member.');
-    } finally {
-      setSubmittingStaff(false);
-    }
-  };
-
-  const activeIncidents = incidents.filter((row) => !['completed', 'resolved', 'cancelled'].includes(row.status?.toLowerCase() ?? ''));
+  const activeIncidents = incidents.filter((row) => {
+    const s = row.status?.toLowerCase() ?? 'pending';
+    return !['assigned', 'accepted', 'resolved', 'completed', 'cancelled', 'responding'].includes(s);
+  });
  
   const acceptedIncidents = incidents.filter((row) => {
     const s = row.status?.toLowerCase() ?? '';
-    return !['completed', 'resolved', 'cancelled'].includes(s);
+    return ['assigned', 'accepted', 'responding', 'active'].includes(s);
   });
 
   const initials = displayName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
@@ -286,20 +233,13 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
             onClick={() => setCurrentTab('accepted')}
             className={`flex w-full items-center gap-3 rounded-lg px-4 py-3 text-sm font-semibold transition-colors ${currentTab === 'accepted' ? 'bg-cyan-500 text-white' : 'text-slate-300 hover:bg-white/5'}`}
           >
-            <CheckCheck size={18} /> Accepted Cases <span className="ml-auto rounded-full bg-white/10 px-2 text-xs">{acceptedIncidents.length}</span>
+            <CheckCheck size={18} /> Assigned Cases <span className="ml-auto rounded-full bg-white/10 px-2 text-xs">{acceptedIncidents.length}</span>
           </button>
           <button
             onClick={() => setCurrentTab('schedule')}
             className={`flex w-full items-center gap-3 rounded-lg px-4 py-3 text-sm font-semibold transition-colors ${currentTab === 'schedule' ? 'bg-cyan-500 text-white' : 'text-slate-300 hover:bg-white/5'}`}
           >
             <CalendarDays size={18} /> Schedule
-          </button>
-         
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex w-full items-center gap-3 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm font-semibold text-cyan-300 hover:bg-cyan-500/20 mt-4"
-          >
-            <PlusCircle size={18} /> Add Responder / Staff
           </button>
         </nav>
         <button onClick={onLogout} className="absolute bottom-5 left-4 right-4 flex items-center gap-3 rounded-lg border border-white/10 px-4 py-3 text-sm text-slate-300 hover:bg-white/5"><LogOut size={18} /> Sign out</button>
@@ -424,24 +364,102 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
          
           {currentTab === 'dashboard' && (
             <>
-              <section className="grid gap-4 md:grid-cols-3">
-                <div className="rounded-xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><div><p className="text-sm text-slate-500">Active reports</p><p className="mt-2 text-3xl font-bold">{activeIncidents.length}</p></div><div className="grid h-11 w-11 place-items-center rounded-lg bg-red-50 text-red-500"><ClipboardList /></div></div><p className="mt-3 text-xs text-slate-400">Pending incident cases</p></div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><div><p className="text-sm text-slate-500">Accepted cases</p><p className="mt-2 text-3xl font-bold">{acceptedIncidents.length}</p></div><div className="grid h-11 w-11 place-items-center rounded-lg bg-emerald-50 text-emerald-500"><CheckCheck /></div></div><p className="mt-3 text-xs text-slate-400">Under management</p></div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><div><p className="text-sm text-slate-500">Availability</p><p className="mt-2 text-xl font-bold capitalize">{availability}</p></div><div className="grid h-11 w-11 place-items-center rounded-lg bg-cyan-50 text-cyan-600"><Stethoscope /></div></div><p className="mt-3 text-xs text-cyan-600">Synced with responder status</p></div>
+              {/* Incident Status Breakdown Boxes (4 columns) */}
+              <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6">
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Pending</p>
+                      <p className="mt-2 text-3xl font-bold text-amber-600">{pendingCount}</p>
+                    </div>
+                    <div className="grid h-11 w-11 place-items-center rounded-lg bg-amber-50 text-amber-500"><Clock3 /></div>
+                  </div>
+                  <p className="mt-3 text-xs text-slate-400">Awaiting initial review</p>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Active</p>
+                      <p className="mt-2 text-3xl font-bold text-red-600">{activeCount}</p>
+                    </div>
+                    <div className="grid h-11 w-11 place-items-center rounded-lg bg-red-50 text-red-500"><ShieldAlert /></div>
+                  </div>
+                  <p className="mt-3 text-xs text-slate-400">Requires urgent attention</p>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Assigned</p>
+                      <p className="mt-2 text-3xl font-bold text-blue-600">{assignedCount}</p>
+                    </div>
+                    <div className="grid h-11 w-11 place-items-center rounded-lg bg-blue-50 text-blue-500"><ClipboardList /></div>
+                  </div>
+                  <p className="mt-3 text-xs text-slate-400">Staff assigned to case</p>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Resolved</p>
+                      <p className="mt-2 text-3xl font-bold text-teal-600">{resolvedCount}</p>
+                    </div>
+                    <div className="grid h-11 w-11 place-items-center rounded-lg bg-teal-50 text-teal-600"><CheckCircle /></div>
+                  </div>
+                  <p className="mt-3 text-xs text-slate-400">Successfully completed</p>
+                </div>
               </section>
 
+              {/* All Recent Incidents Section */}
               <section className="mt-6 rounded-xl border border-slate-200 bg-white">
-                <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><h2 className="text-base font-bold">Pending Active Incidents</h2><p className="mt-0.5 text-xs text-slate-500">Reports requiring immediate medical attention</p></div><button onClick={() => setCurrentTab('assignments')} className="flex items-center gap-1 text-sm font-semibold text-cyan-600">View all <ChevronRight size={16} /></button></div>
+                <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                  <div>
+                    <h2 className="text-base font-bold">All Incident Reports</h2>
+                    <p className="mt-0.5 text-xs text-slate-500">Overview of all reported campus incidents and their statuses</p>
+                  </div>
+                  <button onClick={() => setCurrentTab('assignments')} className="flex items-center gap-1 text-sm font-semibold text-cyan-600">View all <ChevronRight size={16} /></button>
+                </div>
                 <div className="divide-y divide-slate-100">
                   {loading && <div className="px-5 py-12 text-center text-sm text-slate-400">Loading incidents...</div>}
-                  {!loading && activeIncidents.length === 0 && <div className="px-5 py-12 text-center"><CheckCircle2 className="mx-auto text-emerald-500" /><p className="mt-3 font-semibold">No active incidents</p><p className="mt-1 text-sm text-slate-500">New emergency reports will appear here.</p></div>}
-                  {activeIncidents.map((incident) => {
-                    const urgent = /urgent|critical/i.test(incident.priority ?? '');
-                    return <article key={incident.incident_id} className="flex flex-col gap-4 px-5 py-5 md:flex-row md:items-center">
-                      <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-lg ${urgent ? 'bg-red-50 text-red-500' : 'bg-cyan-50 text-cyan-600'}`}><HeartPulse /></div>
-                      <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">Incident #{incident.incident_id}</h3><span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-800">{incident.status ?? 'PENDING'}</span></div><p className="mt-1 truncate text-sm text-slate-500">{incident.description ?? 'Clinic response requested'}</p><div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-400"><span className="flex items-center gap-1"><MapPin size={13} />{incident.location_description ?? 'Location pending'}</span><span className="flex items-center gap-1"><Clock3 size={13} />{incident.reported_at ? new Date(incident.reported_at).toLocaleString() : 'Recently reported'}</span></div></div>
-                      <button onClick={() => void updateIncidentStatus(incident.incident_id, 'ACCEPTED')} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700">Accept case</button>
-                    </article>;
+                  {!loading && incidents.length === 0 && (
+                    <div className="px-5 py-12 text-center">
+                      <CheckCircle2 className="mx-auto text-emerald-500" />
+                      <p className="mt-3 font-semibold">No incident reports found</p>
+                      <p className="mt-1 text-sm text-slate-500">New emergency reports will appear here.</p>
+                    </div>
+                  )}
+                  {incidents.map((incident) => {
+                    const statusVal = incident.status ?? 'pending';
+                    const isAssigned = ['assigned', 'accepted', 'responding', 'resolved', 'completed'].includes(statusVal.toLowerCase());
+
+                    return (
+                      <article key={incident.incident_id} className="flex flex-col gap-4 px-5 py-5 md:flex-row md:items-center">
+                        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-cyan-50 text-cyan-600"><HeartPulse /></div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="font-semibold">Incident #{incident.incident_id}</h3>
+                            <span className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${isAssigned ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'}`}>
+                              {statusVal}
+                            </span>
+                          </div>
+                          <p className="mt-1 truncate text-sm text-slate-500">{incident.description ?? 'Clinic response requested'}</p>
+                          <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-400">
+                            <span className="flex items-center gap-1"><MapPin size={13} />{incident.location_description ?? 'Location pending'}</span>
+                            <span className="flex items-center gap-1"><Clock3 size={13} />{incident.reported_at ? new Date(incident.reported_at).toLocaleString() : 'Recently reported'}</span>
+                          </div>
+                        </div>
+
+                        {/* Accept case updates status to 'assigned' */}
+                        {!isAssigned ? (
+                          <button onClick={() => void updateIncidentStatus(incident.incident_id, 'assigned')} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700">Accept case</button>
+                        ) : (
+                          <span className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-2 text-xs font-semibold text-blue-700 flex items-center gap-1.5">
+                            <CheckCheck size={14} /> Case Assigned
+                          </span>
+                        )}
+                      </article>
+                    );
                   })}
                 </div>
               </section>
@@ -455,14 +473,16 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 {loading && <div className="px-5 py-12 text-center text-sm text-slate-400">Loading incidents...</div>}
                 {!loading && incidents.length === 0 && <div className="px-5 py-12 text-center"><CheckCircle2 className="mx-auto text-emerald-500" /><p className="mt-3 font-semibold">No incidents found</p></div>}
                 {incidents.map((incident) => {
-                  const isAccepted = incident.status?.toLowerCase() === 'accepted';
+                  const statusVal = incident.status ?? 'pending';
+                  const isAssigned = ['assigned', 'accepted', 'responding', 'resolved', 'completed'].includes(statusVal.toLowerCase());
+                  
                   return <article key={incident.incident_id} className="flex flex-col gap-4 px-5 py-5 md:flex-row md:items-center">
                     <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-cyan-50 text-cyan-600"><HeartPulse /></div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-semibold">Incident #{incident.incident_id}</h3>
-                        <span className={`rounded px-2 py-0.5 text-xs font-medium uppercase ${isAccepted ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
-                          {incident.status ?? 'PENDING'}
+                        <span className={`rounded px-2 py-0.5 text-xs font-medium uppercase ${isAssigned ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-600'}`}>
+                          {statusVal}
                         </span>
                       </div>
                       <p className="mt-1 text-sm text-slate-500">{incident.description ?? 'Clinic response requested'}</p>
@@ -471,8 +491,12 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                         <span className="flex items-center gap-1"><Clock3 size={13} />{incident.reported_at ? new Date(incident.reported_at).toLocaleString() : 'Recently reported'}</span>
                       </div>
                     </div>
-                    {!isAccepted && (
-                      <button onClick={() => void updateIncidentStatus(incident.incident_id, 'ACCEPTED')} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700">Accept case</button>
+                    {!isAssigned ? (
+                      <button onClick={() => void updateIncidentStatus(incident.incident_id, 'assigned')} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700">Accept case</button>
+                    ) : (
+                      <span className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-2 text-xs font-semibold text-blue-700 flex items-center gap-1.5">
+                        <CheckCheck size={14} /> Case Assigned
+                      </span>
                     )}
                   </article>;
                 })}
@@ -482,18 +506,19 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
           {currentTab === 'accepted' && (
             <section className="rounded-xl border border-slate-200 bg-white">
-              <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><h2 className="text-base font-bold">Accepted Cases</h2><p className="mt-0.5 text-xs text-slate-500">List of emergency cases accepted by the clinic team</p></div></div>
+              <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><h2 className="text-base font-bold">Assigned Cases</h2><p className="mt-0.5 text-xs text-slate-500">List of emergency cases assigned and managed by the clinic team</p></div></div>
               <div className="divide-y divide-slate-100">
-                {loading && <div className="px-5 py-12 text-center text-sm text-slate-400">Loading accepted cases...</div>}
-                {!loading && acceptedIncidents.length === 0 && <div className="px-5 py-12 text-center"><CheckCircle2 className="mx-auto text-slate-400" /><p className="mt-3 font-semibold text-slate-600">No accepted cases yet</p><p className="mt-1 text-sm text-slate-400">Incidents you accept will appear here.</p></div>}
+                {loading && <div className="px-5 py-12 text-center text-sm text-slate-400">Loading assigned cases...</div>}
+                {!loading && acceptedIncidents.length === 0 && <div className="px-5 py-12 text-center"><CheckCircle2 className="mx-auto text-slate-400" /><p className="mt-3 font-semibold text-slate-600">No assigned cases yet</p><p className="mt-1 text-sm text-slate-400">Incidents you accept will appear here.</p></div>}
                 {acceptedIncidents.map((incident) => {
+                  const currentStatus = incident.status?.toLowerCase() ?? 'assigned';
                   return <article key={incident.incident_id} className="flex flex-col gap-4 px-5 py-5 md:flex-row md:items-center">
-                    <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-600"><CheckCheck /></div>
+                    <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-blue-50 text-blue-600"><CheckCheck /></div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-semibold">Incident #{incident.incident_id}</h3>
-                        <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-semibold uppercase text-emerald-800">
-                          {incident.status ?? 'ACCEPTED'}
+                        <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-semibold uppercase text-blue-800">
+                          {incident.status ?? 'assigned'}
                         </span>
                       </div>
                       <p className="mt-1 text-sm text-slate-500">{incident.description ?? 'Clinic response requested'}</p>
@@ -506,16 +531,14 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                     <div className="flex items-center gap-2">
                       <label className="text-xs font-semibold uppercase text-slate-500">Status:</label>
                       <select
-                        value={incident.status ?? 'Accepted'}
+                        value={['accepted', 'responding'].includes(currentStatus) ? 'assigned' : currentStatus}
                         onChange={(e) => void updateIncidentStatus(incident.incident_id, e.target.value)}
                         className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-cyan-500 cursor-pointer shadow-sm"
                       >
-                        <option value="Pending">Pending</option>
-                        <option value="Active">Active</option>
-                        <option value="Assigned">Assigned</option>
-                        <option value="Responding">Responding</option>
-                        <option value="Accepted">Accepted</option>
-                        <option value="Resolved">Resolved</option>
+                        <option value="pending">Pending</option>
+                        <option value="active">Active</option>
+                        <option value="assigned">Assigned</option>
+                        <option value="resolved">Resolved</option>
                       </select>
                     </div>
                   </article>;
@@ -533,129 +556,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
           )}
         </main>
       </div>
-
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-[#132238] p-6 text-white shadow-2xl border border-slate-700">
-            <div className="flex items-center justify-between border-b border-slate-700 pb-4">
-              <h3 className="text-lg font-bold">Add New Responder or Staff</h3>
-              <button onClick={() => setShowAddModal(false)} className="rounded-lg p-1 text-slate-400 hover:bg-white/10"><X size={20} /></button>
-            </div>
-
-            <form onSubmit={handleCreateStaffSubmit} className="mt-4 space-y-4">
-              {modalError && <div className="rounded-lg bg-red-500/20 border border-red-500/50 p-3 text-sm text-red-300">{modalError}</div>}
-              {modalSuccess && <div className="rounded-lg bg-emerald-500/20 border border-emerald-500/50 p-3 text-sm text-emerald-300">{modalSuccess}</div>}
-
-              <div>
-                <label className="block text-xs font-semibold uppercase text-slate-400">Full Name *</label>
-                <input
-                  type="text"
-                  required
-                  value={newStaffData.name}
-                  onChange={(e) => setNewStaffData({ ...newStaffData, name: e.target.value })}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#0c1624] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-500"
-                  placeholder="e.g., Nurse Maria Santos"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold uppercase text-slate-400">Email Address *</label>
-                  <input
-                    type="email"
-                    required
-                    value={newStaffData.email}
-                    onChange={(e) => setNewStaffData({ ...newStaffData, email: e.target.value })}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-[#0c1624] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-500"
-                    placeholder="maria@clinic.com"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold uppercase text-slate-400">Password * (For Login)</label>
-                  <input
-                    type="password"
-                    required
-                    minLength={6}
-                    value={newStaffData.password}
-                    onChange={(e) => setNewStaffData({ ...newStaffData, password: e.target.value })}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-[#0c1624] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-500"
-                    placeholder="Min. 6 characters"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase text-slate-400">Department / Unit *</label>
-                <input
-                  type="text"
-                  required
-                  value={newStaffData.department}
-                  onChange={(e) => setNewStaffData({ ...newStaffData, department: e.target.value })}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#0c1624] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-500"
-                  placeholder="e.g., University Clinic / Medical Team"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase text-slate-400">Contact Number *</label>
-                <input
-                  type="text"
-                  required
-                  value={newStaffData.contact_number}
-                  onChange={(e) => setNewStaffData({ ...newStaffData, contact_number: e.target.value })}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#0c1624] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-500"
-                  placeholder="e.g., 09123456789"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold uppercase text-slate-400">Initial Status</label>
-                  <select
-                    value={newStaffData.availability_status}
-                    onChange={(e) => setNewStaffData({ ...newStaffData, availability_status: e.target.value })}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-[#0c1624] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-500"
-                  >
-                    <option value="available">Available</option>
-                    <option value="busy">Busy</option>
-                    <option value="offline">Offline</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold uppercase text-slate-400">Role Type</label>
-                  <select
-                    value={newStaffData.role}
-                    onChange={(e) => setNewStaffData({ ...newStaffData, role: e.target.value })}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-[#0c1624] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-500"
-                  >
-                    <option value="Responder">Responder</option>
-                    <option value="Clinic Staff">Clinic Staff</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4 border-t border-slate-700">
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  className="rounded-lg px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-white/5 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submittingStaff}
-                  className="rounded-lg bg-cyan-600 px-5 py-2 text-sm font-semibold text-white hover:bg-cyan-700 disabled:opacity-50 transition-colors"
-                >
-                  {submittingStaff ? 'Creating...' : 'Create Account'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
