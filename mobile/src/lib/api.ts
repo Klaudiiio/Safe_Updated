@@ -32,6 +32,15 @@ export interface IncidentReportPayload {
   location: string;
 }
 
+export interface IncidentHistoryItem {
+  id: number | string;
+  incident_type: string;
+  description: string;
+  location: string;
+  status: string;
+  reported_at: string | null;
+}
+
 export interface SensorDataResponse {
   temperature_c: number;
   humidity_percent?: number;
@@ -193,6 +202,46 @@ async function refreshSupabaseSession(session: AuthSession): Promise<AuthSession
   };
 }
 
+export async function fetchUserIncidents(accessToken: string): Promise<IncidentHistoryItem[]> {
+  if (!API_BASE_URL) {
+    throw new Error('Django API address is not set. Check EXPO_PUBLIC_API_URL.');
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/auth/incidents/`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  } catch {
+    throw new Error('Could not reach Django to fetch incident history. Check your network connection.');
+  }
+
+  const body = await responseBody(response);
+  if (!response.ok) {
+    throw new Error(readableError(body as ApiErrorBody | null, `Failed to fetch incident history (${response.status}).`));
+  }
+
+  return (body as IncidentHistoryItem[]) || [];
+}
+
+export async function fetchUserIncidentsWithSession(
+  session: AuthSession,
+): Promise<{ incidents: IncidentHistoryItem[]; session: AuthSession }> {
+  try {
+    const incidents = await fetchUserIncidents(session.access);
+    return { incidents, session };
+  } catch (error) {
+    // If unauthorized, attempt to refresh session token and retry once
+    if (error instanceof Error && (error.message.includes('401') || error.message.includes('Unauthorized'))) {
+      const refreshedSession = await refreshSupabaseSession(session);
+      const incidents = await fetchUserIncidents(refreshedSession.access);
+      return { incidents, session: refreshedSession };
+    }
+    throw error;
+  }
+}
+
 async function submitIncidentReportWithToken(
   session: AuthSession,
   payload: IncidentReportPayload,
@@ -255,7 +304,6 @@ async function submitIncidentReportWithToken(
     );
   }
 
-  // Robustly handle both 'incident_id' and 'id' column naming conventions
   const created = (createBody as Array<Record<string, unknown>> | null)?.[0];
   const rawId = created?.incident_id ?? created?.id;
   const incidentId = Number(rawId);
@@ -300,7 +348,6 @@ export async function fetchLatestSensorData(): Promise<SensorDataResponse | null
   }
 
   try {
-    // Ordered by recorded_at or id safely to prevent missing column crashes
     const url = `${SUPABASE_URL}/rest/v1/safe_sensor_data?select=temperature_c,humidity_percent,recorded_at&order=recorded_at.desc&limit=1`;
     const response = await fetch(url, {
       method: 'GET',

@@ -41,7 +41,11 @@ const API_BASE_URL = RAW_API_URL
   .replace(/\/$/, '');
 
 export default function HistoryScreen() {
-  const { session } = useAuth();
+  const { session, updateSession, signOut } = useAuth() as {
+    session: any;
+    updateSession?: (newSession: any) => Promise<void>;
+    signOut?: () => Promise<void>;
+  };
   const { isDark } = useTheme();
 
   const [reports, setReports] = useState<IncidentRecord[]>([]);
@@ -50,7 +54,7 @@ export default function HistoryScreen() {
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Fetch incident history through your Django backend API with a 1-minute timeout protection
+  // Fetch incident history through your Django backend API with automatic token refresh on 401
   const fetchMyReports = useCallback(async (isRefresh = false) => {
     if (!session?.access) {
       setLoading(false);
@@ -63,21 +67,67 @@ export default function HistoryScreen() {
       }
       setError(null);
 
-      const controller = new AbortController();
-      // Extended timeout window to 1 minute (60,000 ms)
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      const makeRequest = async (token: string) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000);
 
-      // Correct path including the /api/auth/ prefix:
-      const response = await fetch(`${API_BASE_URL}/api/auth/incidents/`, {
-        headers: {
-          Authorization: `Bearer ${session.access}`,
-        },
-        signal: controller.signal,
-      });
+        try {
+          const response = await fetch(`${API_BASE_URL}/api/auth/incidents/`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+          return response;
+        } catch (err) {
+          clearTimeout(timeoutId);
+          throw err;
+        }
+      };
 
-      clearTimeout(timeoutId);
+      let response = await makeRequest(session.access);
+
+      // If unauthorized (401), attempt to refresh token once
+      if (response.status === 401 && session.refresh) {
+        try {
+          const refreshResponse = await fetch(`${API_BASE_URL}/api/auth/token/refresh/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh: session.refresh }),
+          });
+
+          if (refreshResponse.ok) {
+            const refreshData = await refreshResponse.json();
+            if (refreshData.access) {
+              const updatedSession = {
+                ...session,
+                access: refreshData.access,
+                refresh: refreshData.refresh ?? session.refresh,
+              };
+
+              if (updateSession) {
+                await updateSession(updatedSession);
+              }
+
+              // Retry request with the new access token
+              response = await makeRequest(refreshData.access);
+            }
+          }
+        } catch (refreshErr) {
+          console.error('Token refresh network error:', refreshErr);
+        }
+      }
 
       if (!response.ok) {
+        if (response.status === 401) {
+          if (signOut) {
+            await signOut();
+          } else if (updateSession) {
+            await updateSession(null);
+          }
+          throw new Error('Your session has expired. Please sign in again.');
+        }
         throw new Error(`Server returned status ${response.status}`);
       }
 
@@ -93,7 +143,7 @@ export default function HistoryScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [session]);
+  }, [session, updateSession, signOut]);
 
   // Automatically fetch reports when navigating into this tab from other tabs
   useFocusEffect(

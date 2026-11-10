@@ -1,5 +1,6 @@
+import { Ionicons } from '@expo/vector-icons';
 import { Redirect } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -9,6 +10,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { useAuth } from '../auth/AuthContext';
@@ -20,11 +22,20 @@ export default function SignInScreen() {
   const [error, setError] = useState<string | null>(storageError);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
   const [course, setCourse] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
+
+  // Clear username and password fields when user signs out (user becomes null)
+  useEffect(() => {
+    if (!user) {
+      setUsername('');
+      setPassword('');
+    }
+  }, [user]);
 
   if (user) return <Redirect href={"/tabs" as any} />;
 
@@ -47,6 +58,7 @@ export default function SignInScreen() {
       }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Something went wrong. Please try again.');
+      setPassword(''); // Clear password field on failed sign-in/sign-up attempt
     } finally {
       setLoading(false);
     }
@@ -107,14 +119,36 @@ export default function SignInScreen() {
               autoCapitalize="none"
               autoComplete="username"
             />
-            <Field
-              label="Password"
-              value={password}
-              onChangeText={setPassword}
-              placeholder="Your password"
-              secureTextEntry
-              autoComplete={isRegistering ? 'new-password' : 'current-password'}
-            />
+
+            {/* Password Field with Eye Toggle Icon */}
+            <View style={styles.field}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.passwordContainer}>
+                <TextInput
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="Your password"
+                  placeholderTextColor="#68758b"
+                  secureTextEntry={!showPassword}
+                  autoComplete={isRegistering ? 'new-password' : 'current-password'}
+                  autoCorrect={false}
+                  style={styles.passwordInput}
+                />
+                <TouchableOpacity
+                  onPress={() => setShowPassword(!showPassword)}
+                  style={styles.eyeIconContainer}
+                  accessibilityRole="button"
+                  accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                >
+                  <Ionicons
+                    name={showPassword ? "eye-off-outline" : "eye-outline"}
+                    size={20}
+                    color="#91a0b7"
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
             {isRegistering && (
               <>
                 <Field label="Student / Staff ID (optional)" value={studentId} onChangeText={setStudentId} placeholder="ID number" />
@@ -131,15 +165,15 @@ export default function SignInScreen() {
             )}
 
             <Pressable
-        accessibilityRole="button"
-        disabled={!canSubmit}
-        onPress={() => void submit()}
-        style={({ pressed }: { pressed: boolean }) => [styles.primaryButton, (!canSubmit || pressed) && styles.buttonMuted]}
-      >
-        {loading
-          ? <ActivityIndicator color="#fff" />
-          : <Text style={styles.primaryButtonText}>{isRegistering ? 'Create account' : 'Sign in'}</Text>}
-      </Pressable>
+              accessibilityRole="button"
+              disabled={!canSubmit}
+              onPress={() => void submit()}
+              style={({ pressed }: { pressed: boolean }) => [styles.primaryButton, (!canSubmit || pressed) && styles.buttonMuted]}
+            >
+              {loading
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={styles.primaryButtonText}>{isRegistering ? 'Create account' : 'Sign in'}</Text>}
+            </Pressable>
 
             <Pressable
               accessibilityRole="button"
@@ -201,6 +235,9 @@ const styles = StyleSheet.create({
   field: { gap: 7 },
   label: { color: '#cbd5e1', fontWeight: '600', fontSize: 13 },
   input: { minHeight: 50, color: '#fff', backgroundColor: '#111722', borderRadius: 12, borderWidth: 1, borderColor: '#273244', paddingHorizontal: 14, fontSize: 15 },
+  passwordContainer: { position: 'relative', justifyContent: 'center' },
+  passwordInput: { minHeight: 50, color: '#fff', backgroundColor: '#111722', borderRadius: 12, borderWidth: 1, borderColor: '#273244', paddingHorizontal: 14, paddingRight: 48, fontSize: 15 },
+  eyeIconContainer: { position: 'absolute', right: 14, height: '100%', justifyContent: 'center', alignItems: 'center' },
   helper: { color: '#91a0b7', fontSize: 12, lineHeight: 18 },
   error: { color: '#fecaca', backgroundColor: '#3b171a', borderRadius: 10, padding: 12, fontSize: 13, lineHeight: 19, overflow: 'hidden' },
   primaryButton: { minHeight: 52, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#dc2626', marginTop: 4 },

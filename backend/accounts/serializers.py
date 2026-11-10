@@ -2,6 +2,7 @@ import logging
 
 from django.contrib.auth.models import User
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import UserProfile
@@ -11,7 +12,58 @@ from .utils import SupabaseNotConfigured, SupabaseRequestFailed, sync_user_to_su
 logger = logging.getLogger(__name__)
 
 
+class MobileAuthTokenSerializer(TokenObtainPairSerializer):
+    """
+    Serializer used specifically for the Mobile App Login endpoint.
+    Restricts access strictly to standard Users/Students and blocks Responders/Staff/Admins.
+    """
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
+
+        # Access restriction: Only allow standard users/students into the mobile app
+        user_role = (getattr(profile, 'role', '') or getattr(profile, 'user_type', '')).lower()
+        allowed_roles = {'user', 'student'}
+
+        if user_role not in allowed_roles:
+            raise AuthenticationFailed(
+                "Access denied. Responders and clinic staff are not permitted to log into "
+                "the User Mobile Application. Please use the designated Staff Portal."
+            )
+
+        try:
+            sync_user_to_supabase(self.user, profile)
+        except (SupabaseNotConfigured, SupabaseRequestFailed) as exc:
+            logger.warning(
+                'User %s logged in locally but Supabase sync failed: %s',
+                self.user.pk,
+                str(exc),
+            )
+            data['supabase_synced'] = False
+            data['sync_warning'] = str(exc)
+        else:
+            data['supabase_synced'] = True
+            data['sync_warning'] = None
+
+        try:
+            data['supabase_access_token'] = create_supabase_access_token(self.user, profile)
+        except SupabaseTokenNotConfigured:
+            data['supabase_access_token'] = None
+
+        data['user'] = {
+            'id': self.user.id,
+            'username': self.user.username,
+            'email': self.user.email,
+            'name': profile.name,
+            'role': profile.role,
+        }
+        return data
+
+
 class AuthTokenSerializer(TokenObtainPairSerializer):
+    """
+    Standard Auth Serializer used for Web Admin and General API Authentication.
+    """
     def validate(self, attrs):
         data = super().validate(attrs)
         profile, _ = UserProfile.objects.get_or_create(user=self.user)
@@ -28,12 +80,12 @@ class AuthTokenSerializer(TokenObtainPairSerializer):
         else:
             data['supabase_synced'] = True
             data['sync_warning'] = None
+
         try:
             data['supabase_access_token'] = create_supabase_access_token(self.user, profile)
         except SupabaseTokenNotConfigured:
             data['supabase_access_token'] = None
-            
-        # FIXED: Added 'name' so the frontend profile card correctly displays the user's full name
+
         data['user'] = {
             'id': self.user.id,
             'username': self.user.username,
@@ -74,6 +126,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         profile.student_id = student_id
         profile.course = course
         profile.phone_number = phone_number
+        profile.role = 'user'  # Default role for newly registered mobile users
 
         try:
             sync_user_to_supabase(user, profile)

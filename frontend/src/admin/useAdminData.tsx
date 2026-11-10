@@ -117,6 +117,17 @@ export function useAdminData(): AdminDataState {
               );
             }
           )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'responder' },
+            async (payload: any) => {
+              console.log('⚡ RESPONDER STATUS UPDATED:', payload);
+              if (!active) return;
+
+              // Refresh overview data so responder availability updates instantly across dashboard & responders tab
+              await loadData();
+            }
+          )
           .subscribe((status, err) => {
             console.log(`🔌 Supabase Realtime Status [${channelName}]:`, status);
             if (err) {
@@ -144,4 +155,4 @@ export function useAdminData(): AdminDataState {
   }, [loadData]);
 
   return data;
-}
+} 

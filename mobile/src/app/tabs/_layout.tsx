@@ -1,11 +1,11 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { Tabs } from 'expo-router';
-import { Home, History, User, Sun, Moon, ShieldCheck } from 'lucide-react-native';
+import { Home, History, User, ShieldCheck } from 'lucide-react-native';
 import { useTheme } from '../../context/ThemeContext';
 
 export default function TabLayout() {
-  const { isDark, toggleTheme } = useTheme();
+  const { isDark } = useTheme();
 
   return (
     <Tabs
@@ -37,26 +37,6 @@ export default function TabLayout() {
           </View>
         ),
         headerTitle: '', // Cleared standard title to prioritize the brand header
-        // Sun/Moon Theme Button on the Header Right
-        headerRight: () => (
-          <TouchableOpacity
-            style={[
-              styles.headerThemeBtn,
-              {
-                backgroundColor: isDark ? '#0f172a' : '#f1f5f9',
-                borderColor: isDark ? '#1e293b' : '#e2e8f0',
-              },
-            ]}
-            onPress={toggleTheme}
-            activeOpacity={0.7}
-          >
-            {isDark ? (
-              <Sun size={18} color="#f59e0b" />
-            ) : (
-              <Moon size={18} color="#3b82f6" />
-            )}
-          </TouchableOpacity>
-        ),
         tabBarStyle: {
           backgroundColor: isDark ? '#060913' : '#ffffff',
           borderTopColor: isDark ? '#1e293b' : '#e2e8f0',
@@ -146,14 +126,5 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 10,
     fontWeight: '500',
-  },
-  headerThemeBtn: {
-    marginRight: 16,
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });

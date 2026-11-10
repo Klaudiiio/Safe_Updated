@@ -260,4 +260,4 @@ export function IncidentLogs() {
       </div>
     </div>
   );
-}
+} 

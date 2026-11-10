@@ -237,6 +237,18 @@ export async function updateIncidentStatus(incidentId: string | number, status: 
     throw new Error('Supabase access token is missing.');
   }
 
+  // Normalize UI status value to match Supabase database values
+  let formattedStatus = status.toLowerCase();
+  if (formattedStatus === 'assigned') {
+    formattedStatus = 'ACCEPTED';
+  } else if (formattedStatus === 'resolved') {
+    formattedStatus = 'resolved';
+  } else if (formattedStatus === 'active') {
+    formattedStatus = 'active';
+  } else if (formattedStatus === 'pending') {
+    formattedStatus = 'pending';
+  }
+
   const request = async (accessToken: string) => {
     try {
       let res = await fetch(`${SUPABASE_URL}/rest/v1/incident?incident_id=eq.${incidentId}`, {
@@ -247,7 +259,7 @@ export async function updateIncidentStatus(incidentId: string | number, status: 
           'Content-Type': 'application/json',
           'Prefer': 'return=representation',
         },
-        body: JSON.stringify({ status: status.toLowerCase() }),
+        body: JSON.stringify({ status: formattedStatus }),
       });
 
       if (!res.ok && (res.status === 400 || res.status === 404)) {
@@ -259,7 +271,7 @@ export async function updateIncidentStatus(incidentId: string | number, status: 
             'Content-Type': 'application/json',
             'Prefer': 'return=representation',
           },
-          body: JSON.stringify({ status: status.toLowerCase() }),
+          body: JSON.stringify({ status: formattedStatus }),
         });
       }
 
@@ -414,7 +426,7 @@ export async function deleteUser(userId: string | number): Promise<void> {
 }
 
 export async function subscribeToIncidentInserts(
-  onInsert: () => void,
+  onChange: () => void,
   onError: (message: string) => void,
 ): Promise<() => void> {
   if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY || !supabase) {
@@ -425,11 +437,11 @@ export async function subscribeToIncidentInserts(
   }
 
   const channel = supabase
-    .channel('admin-incident-inserts')
+    .channel('admin-incident-changes')
     .on(
       'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'incident' },
-      onInsert,
+      { event: '*', schema: 'public', table: 'incident' },
+      onChange,
     )
     .subscribe((status) => {
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {

@@ -3,6 +3,7 @@ import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import type { Incident } from '../data/mockData';
+import { mapDbStatusToUi } from '../data/liveData';
 
 interface IncidentCardProps {
   incident: Incident | any;
@@ -65,6 +66,9 @@ export function IncidentCard({
   const timeReported = incident.timeReported || incident.time || incident.date || 'Today';
   const buildingText = incident.building || incident.location || 'Main Campus';
 
+  // Normalize current status using the centralized mapper
+  const currentUiStatus = mapDbStatusToUi(incident.status);
+
   return (
     <Card className="bg-[#0F1825]/50 backdrop-blur-sm border-gray-800 hover:border-[#3B82F6]/50 transition-all p-4">
       <div className="space-y-3">
@@ -92,7 +96,7 @@ export function IncidentCard({
               {isUpdating && <RefreshCw className="w-3 h-3 text-blue-400 animate-spin" />}
               <select
                 disabled={isUpdating}
-                value={(incident.status || 'pending').toLowerCase() === 'responding' ? 'assigned' : (incident.status || 'pending').toLowerCase()}
+                value={currentUiStatus}
                 onChange={(e) => onStatusChange?.(incident.id, e.target.value)}
                 className="bg-transparent text-xs text-white focus:outline-none cursor-pointer disabled:opacity-50"
               >
@@ -142,7 +146,7 @@ export function IncidentCard({
 
         {/* Actions */}
         <div className="flex gap-2 pt-2">
-          {((incident.status || '').toLowerCase() === 'pending') && onAssignResponder && (
+          {currentUiStatus === 'pending' && onAssignResponder && (
             <Button
               size="sm"
               onClick={() => onAssignResponder(incident.id)}

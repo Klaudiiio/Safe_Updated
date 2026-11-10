@@ -1,31 +1,42 @@
+import logging
+import random
+import time
+import requests
+
+from django.conf import settings
+from django.contrib.auth.models import User
 from rest_framework import generics, permissions
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
-from django.contrib.auth.models import User
-from rest_framework.views import APIView
-from django.conf import settings
-import requests
-import time
-import random
 
-from .serializers import AuthTokenSerializer, RegisterSerializer
+from .serializers import (
+    AuthTokenSerializer,
+    MobileAuthTokenSerializer,
+    RegisterSerializer,
+)
 from .supabase_tokens import SupabaseTokenNotConfigured, create_supabase_access_token
 from .utils import SupabaseNotConfigured, SupabaseRequestFailed, sync_user_to_supabase
 
+logger = logging.getLogger(__name__)
+
 
 class LoginView(TokenObtainPairView):
+    """
+    Standard Login View for Web Admin and General API Access.
+    """
     serializer_class = AuthTokenSerializer
 
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
-       
+        
         if response.status_code == 200:
             username = request.data.get("username")
             try:
                 user = User.objects.get(username=username)
                 profile = user.profile
-               
+                
                 sync_user_to_supabase(user, profile)
                 response.data["supabase_synced"] = True
                 response.data["sync_warning"] = None
@@ -47,7 +58,48 @@ class LoginView(TokenObtainPairView):
                 else:
                     response.data["supabase_synced"] = False
                     response.data["sync_warning"] = err_str
-               
+                
+        return response
+
+
+class MobileLoginView(TokenObtainPairView):
+    """
+    Mobile User Login View:
+    Exclusively permits standard users/students while rejecting Responders, Staff, and Admins.
+    """
+    serializer_class = MobileAuthTokenSerializer
+
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        
+        if response.status_code == 200:
+            username = request.data.get("username")
+            try:
+                user = User.objects.get(username=username)
+                profile = user.profile
+                
+                sync_user_to_supabase(user, profile)
+                response.data["supabase_synced"] = True
+                response.data["sync_warning"] = None
+            except User.DoesNotExist:
+                pass
+            except (SupabaseNotConfigured, SupabaseRequestFailed) as exc:
+                err_str = getattr(exc, 'detail', str(exc))
+                if '409' in str(err_str) or 'already exists' in str(err_str):
+                    response.data["supabase_synced"] = True
+                    response.data["sync_warning"] = None
+                else:
+                    response.data["supabase_synced"] = False
+                    response.data["sync_warning"] = err_str
+            except Exception as exc:
+                err_str = str(exc)
+                if '409' in err_str or 'already exists' in err_str:
+                    response.data["supabase_synced"] = True
+                    response.data["sync_warning"] = None
+                else:
+                    response.data["supabase_synced"] = False
+                    response.data["sync_warning"] = err_str
+                
         return response
 
 
@@ -266,7 +318,7 @@ class CreateClinicStaffView(APIView):
                 is_staff=True
             )
             user.set_password(password)
-           
+            
             if hasattr(user, 'profile'):
                 user.profile.name = name
                 user.profile.phone_number = contact_number
@@ -278,7 +330,7 @@ class CreateClinicStaffView(APIView):
             sync_warning = None
             supabase_url = getattr(settings, 'SUPABASE_URL', None)
             service_key = getattr(settings, 'SUPABASE_SERVICE_ROLE_KEY', None)
-           
+            
             if supabase_url and service_key:
                 try:
                     sync_user_to_supabase(user, user.profile)
@@ -296,14 +348,14 @@ class CreateClinicStaffView(APIView):
                         "availability_status": availability_status.lower(),
                         "user_type": role.lower().replace(' ', '_')
                     }
-                   
+                    
                     res = requests.post(
                         f"{supabase_url.rstrip('/')}/rest/v1/responder",
                         json=payload,
                         headers=headers,
                         timeout=10
                     )
-                   
+                    
                     if res.status_code >= 400:
                         res = requests.post(
                             f"{supabase_url.rstrip('/')}/rest/v1/responders",
@@ -374,7 +426,7 @@ class IncidentListView(APIView):
                 return Response({"error": f"Supabase error: {res.text}"}, status=res.status_code)
 
             raw_data = res.json()
-           
+            
             formatted_results = []
             for item in raw_data:
                 incident_type_name = "Incident"

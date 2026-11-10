@@ -37,10 +37,15 @@ export function Dashboard() {
     return !['resolved', 'completed', 'cancelled'].includes(status);
   });
 
-  const availableResponders = responders.filter(r => r.status === 'available');
+  // Synced with Responders tab availability criteria checking both properties safely
+  const availableResponders = responders.filter(r => {
+    const statusStr = ((r as any).status || (r as any).availability_status || '').toLowerCase();
+    return statusStr === 'available';
+  });
+ 
   const pendingReports = normalizedIncidents.filter(i => (i.status?.toLowerCase() || '') === 'pending').length;
   const assignedReports = normalizedIncidents.filter(i => ['assigned', 'accepted'].includes(i.status?.toLowerCase() || '')).length;
-  
+ 
   const dailyIncidents = buildDailyIncidentCounts(normalizedIncidents, currentDate);
   const incidentTypeCounts = normalizedIncidents.reduce<{ type: string; count: number }[]>((counts, incident) => {
     const existing = counts.find((item) => item.type === incident.type);

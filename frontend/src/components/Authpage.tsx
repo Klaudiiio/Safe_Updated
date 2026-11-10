@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Lock, ShieldAlert, User } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Eye, EyeOff, Lock, ShieldAlert, User } from 'lucide-react';
 
 interface AuthPageProps {
   onLoginSuccess: (userData: AuthResponse) => void;
@@ -27,6 +27,23 @@ export default function AuthPage({ onLoginSuccess }: AuthPageProps) {
   const [successMsg, setSuccessMsg] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Clear username and password fields if tokens are wiped out (Sign Out detection)
+  useEffect(() => {
+    const checkAuthStatus = () => {
+      const token = localStorage.getItem('access_token');
+      if (!token) {
+        setUsername('');
+        setPassword('');
+      }
+    };
+
+    // Check on mount and listen to storage events (in case of sign out from another tab/action)
+    checkAuthStatus();
+    window.addEventListener('storage', checkAuthStatus);
+    return () => window.removeEventListener('storage', checkAuthStatus);
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -70,6 +87,7 @@ export default function AuthPage({ onLoginSuccess }: AuthPageProps) {
       window.setTimeout(() => onLoginSuccess(data), 700);
     } catch (submitError: unknown) {
       setError(submitError instanceof Error ? submitError.message : 'An unexpected error occurred.');
+      setPassword(''); // Clear password field immediately on failure
     } finally {
       setLoading(false);
     }
@@ -125,14 +143,26 @@ export default function AuthPage({ onLoginSuccess }: AuthPageProps) {
               </div>
               <input
                 id="admin-password"
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 autoComplete="current-password"
                 required
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder="Enter your password"
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-sm focus:outline-none focus:border-red-500 transition"
+                className="w-full pl-10 pr-10 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-sm focus:outline-none focus:border-red-500 transition"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-slate-300 focus:outline-none"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? (
+                  <EyeOff className="w-4 h-4" />
+                ) : (
+                  <Eye className="w-4 h-4" />
+                )}
+              </button>
             </div>
           </div>
 

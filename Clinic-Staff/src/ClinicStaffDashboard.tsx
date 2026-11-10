@@ -12,7 +12,6 @@ import {
   MapPin,
   Menu,
   Search,
-  Stethoscope,
   CheckCheck,
   ShieldAlert,
   CheckCircle,
@@ -29,7 +28,10 @@ interface IncidentReport {
   location_description?: string;
   status?: string;
   reported_at?: string;
-  priority?: string;
+  incident_types_id?: number;
+  incident_name?: string;
+  user_id?: number;
+  reporter_name?: string;
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/auth';
@@ -62,7 +64,7 @@ async function refreshSupabaseToken(): Promise<string> {
 
 async function supabaseRequest(path: string, options: RequestInit = {}): Promise<any> {
   if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error('Supabase is not configured.');
-  
+ 
   let token = localStorage.getItem('clinic_staff_supabase_token');
   if (!token) {
     token = await refreshSupabaseToken();
@@ -83,7 +85,6 @@ async function supabaseRequest(path: string, options: RequestInit = {}): Promise
 
   let response = await executeFetch(token);
 
-  // If JWT expired (401 / PGRST303), refresh token once and retry
   if (response.status === 401) {
     try {
       const freshToken = await refreshSupabaseToken();
@@ -123,8 +124,23 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     setLoading(true);
     setError('');
     try {
-      const incidentsData = await supabaseRequest('incident?select=*&order=reported_at.desc');
-      setIncidents(incidentsData as IncidentReport[]);
+      let rawData: any[] = [];
+     
+      try {
+        const queryWithUser = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name),user(username)';
+        rawData = await supabaseRequest(`incident?select=${queryWithUser}&order=reported_at.desc`);
+      } catch {
+        const baseQuery = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name)';
+        rawData = await supabaseRequest(`incident?select=${baseQuery}&order=reported_at.desc`);
+      }
+     
+      const formatted = (rawData || []).map((row: any) => ({
+        ...row,
+        incident_name: row.incident_types?.incident_name || 'General Incident',
+        reporter_name: row.user?.username || row.users?.username || (row.user_id ? `Student #${row.user_id}` : 'Student / User'),
+      }));
+
+      setIncidents(formatted);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Unable to load reported incidents.');
     } finally {
@@ -132,7 +148,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }
   }, []);
 
-  // Fetch initial incidents and staff status on load
   useEffect(() => {
     void loadIncidents();
 
@@ -191,7 +206,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }
   };
 
-  // Case-insensitive status breakdown calculations
   const pendingCount = incidents.filter((row) => (row.status?.toLowerCase() ?? 'pending') === 'pending').length;
   const activeCount = incidents.filter((row) => (row.status?.toLowerCase() ?? '') === 'active').length;
   const assignedCount = incidents.filter((row) => ['assigned', 'accepted', 'responding'].includes(row.status?.toLowerCase() ?? '')).length;
@@ -284,9 +298,9 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                             setShowNotifications(false);
                           }}
                         >
-                          <p className="font-semibold text-slate-700">Incident #{incident.incident_id}</p>
+                          <p className="font-semibold text-slate-700">Incident #{incident.incident_id} - {incident.incident_name}</p>
                           <p className="text-slate-500 truncate mt-0.5">
-                            {incident.description ?? 'Medical attention required'}
+                            {incident.description ?? 'Medical attention required'} • By: {incident.reporter_name}
                           </p>
                         </div>
                       ))
@@ -296,7 +310,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               )}
             </div>
 
-            {/* Clickable Profile Menu / Logout Dropdown */}
             <div className="relative border-l border-slate-200 pl-4">
               <button
                 onClick={() => setShowProfileMenu(!showProfileMenu)}
@@ -364,7 +377,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
          
           {currentTab === 'dashboard' && (
             <>
-              {/* Incident Status Breakdown Boxes (4 columns) */}
               <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6">
                 <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <div className="flex items-center justify-between">
@@ -411,7 +423,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 </div>
               </section>
 
-              {/* All Recent Incidents Section */}
               <section className="mt-6 rounded-xl border border-slate-200 bg-white">
                 <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
                   <div>
@@ -439,18 +450,23 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="font-semibold">Incident #{incident.incident_id}</h3>
+                            <span className="rounded-md bg-red-500/10 px-2 py-0.5 text-xs font-bold text-red-600 border border-red-500/20">
+                              {incident.incident_name || 'General Emergency'}
+                            </span>
                             <span className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${isAssigned ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'}`}>
                               {statusVal}
                             </span>
                           </div>
-                          <p className="mt-1 truncate text-sm text-slate-500">{incident.description ?? 'Clinic response requested'}</p>
+                          <p className="mt-1 text-sm text-slate-600">{incident.description ?? 'Clinic response requested'}</p>
+                          <p className="mt-1 text-xs font-medium text-slate-500">
+                            👤 Reported by: <span className="font-semibold text-slate-700">{incident.reporter_name}</span>
+                          </p>
                           <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-400">
                             <span className="flex items-center gap-1"><MapPin size={13} />{incident.location_description ?? 'Location pending'}</span>
                             <span className="flex items-center gap-1"><Clock3 size={13} />{incident.reported_at ? new Date(incident.reported_at).toLocaleString() : 'Recently reported'}</span>
                           </div>
                         </div>
 
-                        {/* Accept case updates status to 'assigned' */}
                         {!isAssigned ? (
                           <button onClick={() => void updateIncidentStatus(incident.incident_id, 'assigned')} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700">Accept case</button>
                         ) : (
@@ -475,17 +491,23 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 {incidents.map((incident) => {
                   const statusVal = incident.status ?? 'pending';
                   const isAssigned = ['assigned', 'accepted', 'responding', 'resolved', 'completed'].includes(statusVal.toLowerCase());
-                  
+                 
                   return <article key={incident.incident_id} className="flex flex-col gap-4 px-5 py-5 md:flex-row md:items-center">
                     <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-cyan-50 text-cyan-600"><HeartPulse /></div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-semibold">Incident #{incident.incident_id}</h3>
+                        <span className="rounded-md bg-red-500/10 px-2 py-0.5 text-xs font-bold text-red-600 border border-red-500/20">
+                          {incident.incident_name || 'General Emergency'}
+                        </span>
                         <span className={`rounded px-2 py-0.5 text-xs font-medium uppercase ${isAssigned ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-600'}`}>
                           {statusVal}
                         </span>
                       </div>
-                      <p className="mt-1 text-sm text-slate-500">{incident.description ?? 'Clinic response requested'}</p>
+                      <p className="mt-1 text-sm text-slate-600">{incident.description ?? 'Clinic response requested'}</p>
+                      <p className="mt-1 text-xs font-medium text-slate-500">
+                        👤 Reported by: <span className="font-semibold text-slate-700">{incident.reporter_name}</span>
+                      </p>
                       <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-400">
                         <span className="flex items-center gap-1"><MapPin size={13} />{incident.location_description ?? 'Location pending'}</span>
                         <span className="flex items-center gap-1"><Clock3 size={13} />{incident.reported_at ? new Date(incident.reported_at).toLocaleString() : 'Recently reported'}</span>
@@ -517,11 +539,17 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-semibold">Incident #{incident.incident_id}</h3>
+                        <span className="rounded-md bg-sky-500/10 px-2 py-0.5 text-xs font-bold text-sky-600 border border-sky-500/20">
+                          {incident.incident_name || 'Medical Incident'}
+                        </span>
                         <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-semibold uppercase text-blue-800">
                           {incident.status ?? 'assigned'}
                         </span>
                       </div>
-                      <p className="mt-1 text-sm text-slate-500">{incident.description ?? 'Clinic response requested'}</p>
+                      <p className="mt-1 text-sm text-slate-600">{incident.description ?? 'Clinic response requested'}</p>
+                      <p className="mt-1 text-xs font-medium text-slate-500">
+                        👤 Reported by: <span className="font-semibold text-slate-700">{incident.reporter_name}</span>
+                      </p>
                       <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-400">
                         <span className="flex items-center gap-1"><MapPin size={13} />{incident.location_description ?? 'Location pending'}</span>
                         <span className="flex items-center gap-1"><Clock3 size={13} />{incident.reported_at ? new Date(incident.reported_at).toLocaleString() : 'Recently reported'}</span>

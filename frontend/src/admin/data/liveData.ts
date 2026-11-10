@@ -67,12 +67,42 @@ function severity(value: unknown): Incident['severity'] {
   return 'high';
 }
 
-function incidentStatus(value: unknown): Incident['status'] {
-  const status = text(value, '').toLowerCase();
-  if (status === 'resolved' || status === 'closed') return 'resolved';
-  if (status === 'responding' || status === 'in_progress' || status === 'in progress') return 'responding';
-  if (status === 'dispatched' || status === 'assigned') return 'assigned';
+/**
+ * Centralized mapping: Translates Supabase database status -> UI status model
+ */
+export function mapDbStatusToUi(dbStatus: unknown): string {
+  const status = text(dbStatus, '').toLowerCase();
+  if (['resolved', 'completed', 'closed'].includes(status)) {
+    return 'resolved';
+  }
+  if (['accepted', 'assigned', 'responding', 'in_progress', 'in progress', 'dispatched'].includes(status)) {
+    return 'assigned';
+  }
+  if (status === 'active') {
+    return 'active';
+  }
   return 'pending';
+}
+
+/**
+ * Centralized mapping: Translates UI status model -> Supabase database status value
+ */
+export function mapUiStatusToDb(uiStatus: unknown): string {
+  const status = text(uiStatus, '').toLowerCase();
+  if (status === 'assigned') {
+    return 'ACCEPTED'; // Matches Supabase database schema convention
+  }
+  if (status === 'resolved') {
+    return 'resolved';
+  }
+  if (status === 'active') {
+    return 'active';
+  }
+  return 'pending';
+}
+
+function incidentStatus(value: unknown): Incident['status'] {
+  return mapDbStatusToUi(value) as Incident['status'];
 }
 
 function responderStatus(value: unknown): Responder['status'] {

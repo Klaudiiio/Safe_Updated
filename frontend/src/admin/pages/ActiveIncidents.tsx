@@ -7,10 +7,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { DataNotice } from '../DataNotice';
 import { useAdminData } from '../useAdminData';
 import { updateIncidentStatus } from '../api';
+import { mapDbStatusToUi } from '../data/liveData';
 
 export function ActiveIncidents() {
-  const { incidents, loading, error } = useAdminData();
-  const activeIncidents = incidents.filter((i: any) => i.status?.toLowerCase() !== 'resolved');
+  const adminData = useAdminData() as any;
+  const { incidents, loading, error } = adminData;
+ 
+  // Active incidents are non-resolved incidents
+  const activeIncidents = incidents.filter((i: any) => mapDbStatusToUi(i.status) !== 'resolved');
+ 
   const [severityFilter, setSeverityFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [buildingFilter, setBuildingFilter] = useState('all');
@@ -18,8 +23,7 @@ export function ActiveIncidents() {
 
   const filteredIncidents = incidents.filter((incident: any) => {
     const sev = (incident.severity || incident.priority || '').toLowerCase();
-    const stat = (incident.status || '').toLowerCase();
-    const normalizedStat = stat === 'responding' ? 'assigned' : stat;
+    const normalizedStat = mapDbStatusToUi(incident.status);
     const bld = (incident.building || incident.location || '').toLowerCase();
 
     return (
@@ -33,7 +37,12 @@ export function ActiveIncidents() {
     setUpdatingId(incidentId);
     try {
       await updateIncidentStatus(incidentId, newStatus);
-      window.location.reload();
+      // Trigger a clean data refresh or fallback to reload
+      if (typeof adminData.refetch === 'function') {
+        await adminData.refetch();
+      } else {
+        window.location.reload();
+      }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to update incident status.');
     } finally {
