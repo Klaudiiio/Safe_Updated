@@ -10,8 +10,6 @@ import {
   Settings,
   Search,
   Shield,
-  Menu,
-  X,
   Clock,
   Calendar,
   CheckCheck
@@ -46,7 +44,7 @@ interface DashboardLayoutProps {
 }
 
 export function DashboardLayout({ displayName, onLogout }: DashboardLayoutProps) {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isHovered, setIsHovered] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const [isRinging, setIsRinging] = useState(false);
  
@@ -124,24 +122,34 @@ export function DashboardLayout({ displayName, onLogout }: DashboardLayoutProps)
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#FFF8E7] via-[#FFF3D6] to-[#FFE4B5]">
-      {/* Sidebar - Orange Gradient */}
+      {/* Sidebar - Hover Collapsible (w-16 collapsed, w-64 expanded) */}
       <aside
-        className={`fixed left-0 top-0 z-40 h-screen transition-transform ${
-          isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        } w-64 bg-gradient-to-b from-[#F59E0B] via-[#F59E0B] to-[#E88B08] border-r border-amber-600/30 flex flex-col justify-between shadow-xl shadow-amber-950/20`}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        className={`fixed left-0 top-0 z-40 h-screen transition-all duration-300 ease-in-out ${
+          isHovered ? 'w-64' : 'w-16'
+        } bg-gradient-to-r from-[#151130] via-[#1a153b] to-[#231e4d] border-r border-indigo-950/60 flex flex-col justify-between shadow-2xl shadow-slate-950/40 overflow-hidden`}
       >
         <div>
-          {/* Logo / Header Brand */}
-          <div className="flex flex-col items-center justify-center p-6 border-b border-amber-600/30 text-center">
-            <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center mb-2 shadow-inner border border-white/40">
-              <Shield className="w-8 h-8 text-white stroke-[2.5]" />
+          {/* Logo / Header Brand - Clickable to return to Dashboard */}
+          <Link
+            to="/"
+            title="Go to Dashboard"
+            className="flex flex-col items-center justify-center p-4 border-b border-indigo-950/50 text-center hover:bg-white/5 transition-colors cursor-pointer group"
+          >
+            <div className="w-10 h-10 bg-white/10 rounded-2xl flex items-center justify-center mb-1 shadow-inner border border-white/20 shrink-0 group-hover:border-indigo-300 transition-colors">
+              <Shield className="w-5 h-5 text-indigo-300 stroke-[2.5]" />
             </div>
-            <h1 className="font-extrabold text-white text-xl tracking-wider">SAFE</h1>
-            <p className="text-xs text-amber-100 font-medium">Emergency Monitor</p>
-          </div>
+            {isHovered && (
+              <>
+                <h1 className="font-extrabold text-white text-base tracking-wider mt-1 group-hover:text-indigo-200 transition-colors">SAFE</h1>
+                <p className="text-[10px] text-indigo-300 font-medium">Emergency Monitor</p>
+              </>
+            )}
+          </Link>
 
-          {/* Navigation - Blue hover/active tabs with black font, preventing white flashes */}
-          <nav className="max-h-[calc(100vh-250px)] overflow-y-auto p-4 space-y-1.5">
+          {/* Navigation */}
+          <nav className="max-h-[calc(100vh-200px)] overflow-y-auto p-2 space-y-1.5">
             {menuItems.map((item) => {
               const Icon = item.icon;
               const isActive = currentPath === item.path;
@@ -150,14 +158,17 @@ export function DashboardLayout({ displayName, onLogout }: DashboardLayoutProps)
                 <Link
                   key={item.path}
                   to={item.path}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-semibold outline-none ${
+                  title={!isHovered ? item.label : undefined}
+                  className={`flex items-center gap-3 px-3.5 py-3 rounded-xl transition-all font-semibold outline-none ${
                     isActive
-                      ? 'bg-[#201b50] text-white shadow-lg shadow-slate-950/40 ring-1 ring-white/30'
-                      : 'bg-white/10 text-slate-900 shadow-sm shadow-amber-950/10 hover:bg-[#201b50] hover:text-white hover:shadow-md'
+                      ? 'bg-white text-[#201b50] shadow-lg shadow-slate-950/50 ring-2 ring-indigo-300'
+                      : 'bg-white/5 text-white/90 shadow-sm shadow-slate-950/20 hover:bg-white hover:text-[#201b50] hover:shadow-md'
                   }`}
                 >
-                  <Icon className={`w-5 h-5 ${isActive ? 'text-white' : 'text-slate-900 group-hover:text-white'}`} />
-                  <span className="text-sm font-semibold">{item.label}</span>
+                  <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-indigo-600' : 'text-indigo-300 group-hover:text-indigo-600'}`} />
+                  <span className={`text-sm font-semibold whitespace-nowrap transition-opacity duration-200 ${isHovered ? 'opacity-100' : 'opacity-0 hidden'}`}>
+                    {item.label}
+                  </span>
                 </Link>
               );
             })}
@@ -165,29 +176,22 @@ export function DashboardLayout({ displayName, onLogout }: DashboardLayoutProps)
         </div>
 
         {/* System Status / Footer badge */}
-        <div className="p-4 border-t border-amber-600/30 bg-[#E08E07]">
-          <div className="flex items-center gap-2 px-3 py-2 bg-white/20 rounded-lg border border-white/30 text-white">
-            <div className="w-2.5 h-2.5 bg-emerald-300 rounded-full animate-pulse"></div>
-            <span className="text-xs font-semibold tracking-wide">Demo Preview System</span>
+        <div className="p-3 border-t border-indigo-950/50 bg-[#110d26]">
+          <div className="flex items-center gap-2 px-2.5 py-2 bg-white/10 rounded-lg border border-white/20 text-white overflow-hidden">
+            <div className="w-2.5 h-2.5 bg-emerald-400 rounded-full animate-pulse shrink-0"></div>
+            <span className={`text-[11px] font-semibold tracking-wide whitespace-nowrap transition-opacity duration-200 ${isHovered ? 'opacity-100' : 'opacity-0 hidden'}`}>
+              Demo Preview System
+            </span>
           </div>
         </div>
       </aside>
 
-      {/* Main Content */}
-      <div className={`transition-all ${isSidebarOpen ? 'ml-64' : 'ml-0'}`}>
+      {/* Main Content (Dynamically adjusts margin based on hover state) */}
+      <div className={`transition-all duration-300 ease-in-out ${isHovered ? 'ml-64' : 'ml-16'}`}>
         {/* Top Navigation */}
         <header className="sticky top-0 z-30 bg-[#201b50] backdrop-blur-sm border-b border-indigo-950/40 shadow-xl shadow-slate-950/20">
           <div className="flex items-center justify-between px-6 py-4">
             <div className="flex items-center gap-4 flex-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                className="text-white hover:bg-white/10 rounded-xl"
-              >
-                {isSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-              </Button>
-
               <div className="relative w-full max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/70" />
                 <Input

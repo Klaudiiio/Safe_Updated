@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Activity, AlertCircle, Users, TrendingUp, MapPin, Camera, Radio, ClipboardList } from 'lucide-react';
+import { Activity, AlertCircle, Users, TrendingUp, MapPin, Camera, ClipboardList } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { IncidentCard } from '../components/IncidentCard';
@@ -173,11 +173,11 @@ export function Dashboard() {
                       {incident.building}{incident.location !== '—' ? `, ${incident.location}` : ''}
                     </p>
                   </div>
-                  <span className="text-right text-xs text-slate-400 font-mono">
-                    {incident.gpsCoords.lat || incident.gpsCoords.lng
-                      ? `${incident.gpsCoords.lat}, ${incident.gpsCoords.lng}`
-                      : 'Coordinates unavailable'}
-                  </span>
+                  {(incident.gpsCoords?.lat || incident.gpsCoords?.lng) && (
+                    <span className="text-right text-xs text-slate-400 font-mono">
+                      {`${incident.gpsCoords.lat}, ${incident.gpsCoords.lng}`}
+                    </span>
+                  )}
                 </div>
               ))}
               {!loading && !error && activeIncidents.length === 0 && (
@@ -284,22 +284,6 @@ export function Dashboard() {
               {!loading && !error && availableResponders.length === 0 && (
                 <p className="py-4 text-center text-xs text-slate-400">No available responders found.</p>
               )}
-            </div>
-          </Card>
-
-          {/* Emergency Communication */}
-          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
-                <Radio className="w-5 h-5 text-blue-600" />
-              </div>
-              <div>
-                <h2 className="text-base font-bold text-slate-900">Communication</h2>
-                <p className="text-xs text-slate-500">Broadcast integration is not configured</p>
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-100 bg-amber-50/30 p-4 text-xs text-slate-500 font-medium leading-relaxed">
-              Emergency broadcasts are unavailable until a delivery service is connected.
             </div>
           </Card>
 
