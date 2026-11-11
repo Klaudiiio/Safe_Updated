@@ -88,11 +88,11 @@ export function useAdminData(): AdminDataState {
       return undefined;
     });
 
-    // Set up Realtime listener using fluent method chaining to avoid race conditions
+    // Set up Realtime listener using a static channel name to prevent connection spam
     try {
       if (supabase) {
         const client = supabase;
-        const channelName = `admin-realtime-channel-${Date.now()}`;
+        const channelName = 'admin-global-realtime-channel';
 
         const realTimeChannel = client
           .channel(channelName)

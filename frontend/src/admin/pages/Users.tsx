@@ -70,7 +70,7 @@ export function Users() {
         phone_number: phoneNumber,
         user_type: userType,
       } as any);
-      
+     
       setIsModalOpen(false);
       setName('');
       setUsername('');
@@ -102,14 +102,14 @@ export function Users() {
       <DataNotice loading={loading} error={error} />
      
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-amber-200/50 shadow-sm">
         <div>
-          <h1 className="text-2xl font-bold text-white mb-1">User Management</h1>
-          <p className="text-gray-400 text-sm">Add, manage, and remove standard platform users</p>
+          <h1 className="text-2xl font-extrabold text-slate-900 mb-1">User Management</h1>
+          <p className="text-slate-700 text-sm font-semibold">Add, manage, and remove standard platform users</p>
         </div>
         <Button
           onClick={() => setIsModalOpen(true)}
-          className="bg-[#3B82F6] hover:bg-blue-600 text-white flex items-center gap-2 w-fit shadow-md text-xs"
+          className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2 w-fit shadow-md text-xs font-bold rounded-xl"
         >
           <UserPlus className="w-4 h-4" />
           Add New User
@@ -118,65 +118,71 @@ export function Users() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-5">
+        <Card className="bg-white border-amber-200/60 shadow-md p-5 rounded-2xl">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Total Users</p>
-              <p className="text-3xl font-bold text-white">{standardUsers.length}</p>
+              <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Total Users</p>
+              <p className="text-3xl font-extrabold text-slate-900">{standardUsers.length}</p>
             </div>
-            <UsersRound className="w-8 h-8 text-gray-400" />
+            <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center">
+              <UsersRound className="w-6 h-6 text-slate-600" />
+            </div>
           </div>
         </Card>
 
-        <Card className="bg-gradient-to-br from-[#3B82F6]/20 to-[#3B82F6]/5 border-[#3B82F6]/30 p-5">
+        <Card className="bg-white border-blue-200 shadow-md p-5 rounded-2xl">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Students / Standard Users</p>
-              <p className="text-3xl font-bold text-white">{standardUsers.length}</p>
+              <p className="text-blue-700 text-xs font-semibold uppercase tracking-wider mb-1">Students / Standard Users</p>
+              <p className="text-3xl font-extrabold text-slate-900">{standardUsers.length}</p>
             </div>
-            <UsersRound className="w-8 h-8 text-[#3B82F6]" />
+            <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
+              <UsersRound className="w-6 h-6 text-blue-600" />
+            </div>
           </div>
         </Card>
 
-        <Card className="bg-gradient-to-br from-[#22C55E]/20 to-[#22C55E]/5 border-[#22C55E]/30 p-5">
+        <Card className="bg-white border-emerald-200 shadow-md p-5 rounded-2xl">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Active Status</p>
-              <p className="text-3xl font-bold text-white">
+              <p className="text-emerald-700 text-xs font-semibold uppercase tracking-wider mb-1">Active Status</p>
+              <p className="text-3xl font-extrabold text-slate-900">
                 {standardUsers.filter((u: any) => (u.status || 'active').toLowerCase() === 'active').length}
               </p>
             </div>
-            <UsersRound className="w-8 h-8 text-[#22C55E]" />
+            <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center">
+              <UsersRound className="w-6 h-6 text-emerald-600" />
+            </div>
           </div>
         </Card>
       </div>
 
       {/* Search */}
-      <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-4">
+      <Card className="bg-white border-amber-200/60 shadow-md p-4 rounded-2xl">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <Input
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search users by name, username, course..."
-            className="pl-10 bg-[#0B1220] border-gray-800 text-white placeholder:text-gray-500 text-xs"
+            className="pl-10 bg-slate-50 border-slate-200 text-slate-900 placeholder:text-slate-400 text-xs rounded-xl font-medium focus:bg-white"
           />
         </div>
       </Card>
 
       {/* Users Table */}
-      <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800">
+      <Card className="bg-white border-amber-200/60 shadow-md rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
-              <TableRow className="border-gray-800 hover:bg-transparent">
-                <TableHead className="text-gray-400">User</TableHead>
-                <TableHead className="text-gray-400">Role</TableHead>
-                <TableHead className="text-gray-400">Username</TableHead>
-                <TableHead className="text-gray-400">Course / Department</TableHead>
-                <TableHead className="text-gray-400">Status</TableHead>
-                <TableHead className="text-gray-400">Actions</TableHead>
+              <TableRow className="border-slate-100 hover:bg-transparent bg-slate-50">
+                <TableHead className="text-slate-700 font-bold">User</TableHead>
+                <TableHead className="text-slate-700 font-bold">Role</TableHead>
+                <TableHead className="text-slate-700 font-bold">Username</TableHead>
+                <TableHead className="text-slate-700 font-bold">Course / Department</TableHead>
+                <TableHead className="text-slate-700 font-bold">Status</TableHead>
+                <TableHead className="text-slate-700 font-bold">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -189,38 +195,38 @@ export function Users() {
                 const status = user.status || 'Active';
 
                 return (
-                  <TableRow key={userId} className="border-gray-800 hover:bg-[#0B1220]/50">
+                  <TableRow key={userId} className="border-slate-100 hover:bg-slate-50/80">
                     <TableCell>
                       <div className="flex items-center gap-3">
-                        <Avatar className="w-10 h-10 border-2 border-gray-700">
-                          <AvatarFallback className="bg-gradient-to-br from-[#3B82F6] to-[#FF3B30] text-white text-xs">
+                        <Avatar className="w-10 h-10 border border-slate-200">
+                          <AvatarFallback className="bg-blue-600 text-white text-xs font-bold">
                             {initials}
                           </AvatarFallback>
                         </Avatar>
                         <div>
-                          <p className="font-medium text-white text-sm">{name}</p>
-                          <p className="text-xs text-gray-500 font-mono">ID: {userId}</p>
+                          <p className="font-bold text-slate-900 text-sm">{name}</p>
+                          <p className="text-xs text-slate-500 font-mono">ID: {userId}</p>
                         </div>
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge className="bg-gray-500/20 text-gray-400 border-gray-500/50">
+                      <Badge className="bg-slate-100 text-slate-700 border-slate-200 font-semibold">
                         {role}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-gray-300 font-mono text-xs">{user.username || '—'}</TableCell>
-                    <TableCell className="text-gray-300 text-xs">{course}</TableCell>
+                    <TableCell className="text-slate-700 font-mono text-xs font-semibold">{user.username || '—'}</TableCell>
+                    <TableCell className="text-slate-700 text-xs font-medium">{course}</TableCell>
                     <TableCell>
                       <Badge className={status.toLowerCase() === 'active' || status.toLowerCase() === 'available'
-                        ? 'bg-[#22C55E]/20 text-[#22C55E] border-[#22C55E]/50'
-                        : 'bg-gray-500/20 text-gray-400 border-gray-500/50'}>
+                        ? 'bg-emerald-100 text-emerald-700 border-emerald-200 font-bold'
+                        : 'bg-slate-100 text-slate-600 border-slate-200 font-bold'}>
                         {status}
                       </Badge>
                     </TableCell>
                     <TableCell>
                       <button
                         onClick={() => handleDelete(userId)}
-                        className="text-red-400 hover:text-red-300 p-1.5 bg-red-500/10 hover:bg-red-500/20 rounded-lg transition-colors cursor-pointer"
+                        className="text-red-600 hover:text-red-700 p-1.5 bg-red-50 hover:bg-red-100 rounded-xl transition-colors cursor-pointer"
                         title="Delete User"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -231,7 +237,7 @@ export function Users() {
               })}
               {!loading && !error && matchingUsers.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-gray-400">
+                  <TableCell colSpan={6} className="py-8 text-center text-slate-500 font-medium">
                     No matching users found.
                   </TableCell>
                 </TableRow>
@@ -243,13 +249,13 @@ export function Users() {
 
       {/* Add User Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <Card className="bg-[#0F1825] border-gray-800 w-full max-w-md p-6 space-y-6 relative shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-800 pb-4">
-              <h2 className="text-lg font-bold text-white">Add New User</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <Card className="bg-white border-amber-200 text-slate-900 w-full max-w-md p-6 space-y-6 relative shadow-2xl rounded-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <h2 className="text-lg font-bold text-slate-900">Add New User</h2>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-gray-400 hover:text-white transition-colors cursor-pointer"
+                className="text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -257,7 +263,7 @@ export function Users() {
 
             <form onSubmit={handleAddUser} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1" htmlFor="full-name-input">Full Name *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1" htmlFor="full-name-input">Full Name *</label>
                 <input
                   id="full-name-input"
                   name="fullName"
@@ -266,12 +272,12 @@ export function Users() {
                   placeholder="e.g., Juan Dela Cruz"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1" htmlFor="username-input">Username</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1" htmlFor="username-input">Username</label>
                 <input
                   id="username-input"
                   name="username"
@@ -279,12 +285,12 @@ export function Users() {
                   placeholder="e.g., juandelacruz (optional)"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1" htmlFor="password-input">Password *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1" htmlFor="password-input">Password *</label>
                 <input
                   id="password-input"
                   name="password"
@@ -294,12 +300,12 @@ export function Users() {
                   placeholder="Min. 6 characters"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1" htmlFor="course-input">Course / Department</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1" htmlFor="course-input">Course / Department</label>
                 <input
                   id="course-input"
                   name="course"
@@ -307,12 +313,12 @@ export function Users() {
                   placeholder="e.g., BS Information Technology"
                   value={course}
                   onChange={(e) => setCourse(e.target.value)}
-                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1" htmlFor="phone-input">Phone Number</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1" htmlFor="phone-input">Phone Number</label>
                 <input
                   id="phone-input"
                   name="phoneNumber"
@@ -320,36 +326,36 @@ export function Users() {
                   placeholder="e.g., 09123456789"
                   value={phoneNumber}
                   onChange={(e) => setPhoneNumber(e.target.value)}
-                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1" htmlFor="role-select">Role Type</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1" htmlFor="role-select">Role Type</label>
                 <select
                   id="role-select"
                   name="userType"
                   value={userType}
                   onChange={(e) => setUserType(e.target.value)}
-                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 cursor-pointer"
                 >
                   <option value="user">User / Student</option>
                 </select>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-800">
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() => setIsModalOpen(false)}
-                  className="border-gray-700 text-gray-300 hover:bg-gray-800 text-xs"
+                  className="border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold rounded-xl"
                 >
                   Cancel
                 </Button>
                 <Button
                   type="submit"
                   disabled={submitting}
-                  className="bg-[#3B82F6] hover:bg-blue-600 text-white text-xs flex items-center gap-2"
+                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-2 rounded-xl shadow-sm"
                 >
                   {submitting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
                   Save User

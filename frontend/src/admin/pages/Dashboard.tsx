@@ -57,62 +57,63 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       <DataNotice loading={loading} error={error} />
+     
       {/* Page Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-white mb-1">SAFE Medical Emergency Monitoring Center</h1>
-        <p className="text-gray-400 text-sm">University of Science and Technology of Southern Philippines</p>
+      <div className="mb-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-amber-200/50 shadow-sm">
+        <h1 className="text-2xl font-extrabold text-slate-900 mb-1">SAFE Medical Emergency Monitoring Center</h1>
+        <p className="text-slate-700 text-sm font-semibold">University of Science and Technology of Southern Philippines</p>
       </div>
 
       {/* Hero Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="bg-gradient-to-br from-[#FF3B30]/20 to-[#FF3B30]/5 border-[#FF3B30]/30 p-5">
+        <Card className="bg-white border-amber-200/60 shadow-md p-5 rounded-2xl hover:shadow-lg transition-all">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Active Incidents</p>
-              <p className="text-3xl font-bold text-white">{activeIncidents.length}</p>
-              <p className="text-[#FF3B30] text-xs mt-2 font-medium">Requires Attention</p>
+              <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Active Incidents</p>
+              <p className="text-3xl font-extrabold text-slate-900">{activeIncidents.length}</p>
+              <p className="text-rose-600 text-xs mt-2 font-bold">Requires Attention</p>
             </div>
-            <div className="w-12 h-12 bg-[#FF3B30]/20 rounded-lg flex items-center justify-center">
-              <AlertCircle className="w-6 h-6 text-[#FF3B30]" />
+            <div className="w-12 h-12 bg-rose-100 rounded-xl flex items-center justify-center">
+              <AlertCircle className="w-6 h-6 text-rose-600" />
             </div>
           </div>
         </Card>
 
-        <Card className="bg-gradient-to-br from-[#22C55E]/20 to-[#22C55E]/5 border-[#22C55E]/30 p-5">
+        <Card className="bg-white border-amber-200/60 shadow-md p-5 rounded-2xl hover:shadow-lg transition-all">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Available Responders</p>
-              <p className="text-3xl font-bold text-white">{availableResponders.length}</p>
-              <p className="text-[#22C55E] text-xs mt-2 font-medium">Ready to Respond</p>
+              <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Available Responders</p>
+              <p className="text-3xl font-extrabold text-slate-900">{availableResponders.length}</p>
+              <p className="text-emerald-600 text-xs mt-2 font-bold">Ready to Respond</p>
             </div>
-            <div className="w-12 h-12 bg-[#22C55E]/20 rounded-lg flex items-center justify-center">
-              <Users className="w-6 h-6 text-[#22C55E]" />
+            <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center">
+              <Users className="w-6 h-6 text-emerald-600" />
             </div>
           </div>
         </Card>
 
-        <Card className="bg-gradient-to-br from-[#3B82F6]/20 to-[#3B82F6]/5 border-[#3B82F6]/30 p-5">
+        <Card className="bg-white border-amber-200/60 shadow-md p-5 rounded-2xl hover:shadow-lg transition-all">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Assigned Cases</p>
-              <p className="text-3xl font-bold text-white">{assignedReports}</p>
-              <p className="text-[#3B82F6] text-xs mt-2 font-medium">Under Management</p>
+              <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Assigned Cases</p>
+              <p className="text-3xl font-extrabold text-slate-900">{assignedReports}</p>
+              <p className="text-blue-600 text-xs mt-2 font-bold">Under Management</p>
             </div>
-            <div className="w-12 h-12 bg-[#3B82F6]/20 rounded-lg flex items-center justify-center">
-              <ClipboardList className="w-6 h-6 text-[#3B82F6]" />
+            <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
+              <ClipboardList className="w-6 h-6 text-blue-600" />
             </div>
           </div>
         </Card>
 
-        <Card className="bg-gradient-to-br from-[#FACC15]/20 to-[#FACC15]/5 border-[#FACC15]/30 p-5">
+        <Card className="bg-white border-amber-200/60 shadow-md p-5 rounded-2xl hover:shadow-lg transition-all">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Pending Reports</p>
-              <p className="text-3xl font-bold text-white">{pendingReports}</p>
-              <p className="text-[#FACC15] text-xs mt-2 font-medium">Awaiting Assignment</p>
+              <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Pending Reports</p>
+              <p className="text-3xl font-extrabold text-slate-900">{pendingReports}</p>
+              <p className="text-amber-600 text-xs mt-2 font-bold">Awaiting Assignment</p>
             </div>
-            <div className="w-12 h-12 bg-[#FACC15]/20 rounded-lg flex items-center justify-center">
-              <Activity className="w-6 h-6 text-[#FACC15]" />
+            <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
+              <Activity className="w-6 h-6 text-amber-600" />
             </div>
           </div>
         </Card>
@@ -122,19 +123,19 @@ export function Dashboard() {
         {/* Left Column */}
         <div className="lg:col-span-2 space-y-6">
           {/* Live Incident Feed */}
-          <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-6">
+          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
             <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-[#FF3B30]/20 rounded-lg flex items-center justify-center">
-                  <AlertCircle className="w-5 h-5 text-[#FF3B30]" />
+                <div className="w-10 h-10 bg-rose-100 rounded-xl flex items-center justify-center">
+                  <AlertCircle className="w-5 h-5 text-rose-600" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-semibold text-white">Incident Feed</h2>
-                  <p className="text-xs text-gray-400">Supabase incident reports</p>
+                  <h2 className="text-base font-bold text-slate-900">Incident Feed</h2>
+                  <p className="text-xs text-slate-500">Supabase incident reports</p>
                 </div>
               </div>
-              <Badge className="bg-[#FF3B30]/20 text-[#FF3B30] border-[#FF3B30]/50">
-                <div className="w-2 h-2 bg-[#FF3B30] rounded-full animate-pulse mr-2"></div>
+              <Badge className="bg-rose-100 text-rose-700 border-rose-200 font-bold px-3 py-1">
+                <div className="w-2 h-2 bg-rose-600 rounded-full animate-pulse mr-1.5"></div>
                 {activeIncidents.length} Active
               </Badge>
             </div>
@@ -146,33 +147,33 @@ export function Dashboard() {
                 />
               ))}
               {!loading && !error && activeIncidents.length === 0 && (
-                <p className="py-6 text-center text-sm text-gray-400">No active incidents.</p>
+                <p className="py-6 text-center text-sm text-slate-400">No active incidents.</p>
               )}
             </div>
           </Card>
 
           {/* Incident locations */}
-          <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-6">
+          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
             <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 bg-[#3B82F6]/20 rounded-lg flex items-center justify-center">
-                <MapPin className="w-5 h-5 text-[#3B82F6]" />
+              <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
+                <MapPin className="w-5 h-5 text-amber-700" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-white">Incident Locations</h2>
-                <p className="text-xs text-gray-400">Location details from incident reports</p>
+                <h2 className="text-base font-bold text-slate-900">Incident Locations</h2>
+                <p className="text-xs text-slate-500">Location details from incident reports</p>
               </div>
             </div>
             <div className="space-y-3">
               {activeIncidents.slice(0, 5).map((incident) => (
-                <div key={incident.id} className="flex items-start gap-3 rounded-lg border border-gray-800 bg-[#0B1220]/50 p-3">
-                  <MapPin className="mt-0.5 h-4 w-4 text-[#3B82F6]" />
+                <div key={incident.id} className="flex items-start gap-3 rounded-xl border border-slate-100 bg-amber-50/30 p-3.5">
+                  <MapPin className="mt-0.5 h-4 w-4 text-amber-600 shrink-0" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-white">{incident.type}</p>
-                    <p className="text-xs text-gray-400">
+                    <p className="text-sm font-bold text-slate-900">{incident.type}</p>
+                    <p className="text-xs text-slate-600">
                       {incident.building}{incident.location !== '—' ? `, ${incident.location}` : ''}
                     </p>
                   </div>
-                  <span className="text-right text-xs text-gray-500">
+                  <span className="text-right text-xs text-slate-400 font-mono">
                     {incident.gpsCoords.lat || incident.gpsCoords.lng
                       ? `${incident.gpsCoords.lat}, ${incident.gpsCoords.lng}`
                       : 'Coordinates unavailable'}
@@ -180,73 +181,74 @@ export function Dashboard() {
                 </div>
               ))}
               {!loading && !error && activeIncidents.length === 0 && (
-                <p className="py-6 text-center text-sm text-gray-400">No active incidents to locate.</p>
+                <p className="py-6 text-center text-sm text-slate-400">No active incidents to locate.</p>
               )}
             </div>
           </Card>
 
           {/* System Analytics */}
-          <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-6">
+          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
             <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 bg-[#3B82F6]/20 rounded-lg flex items-center justify-center">
-                <TrendingUp className="w-5 h-5 text-[#3B82F6]" />
+              <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
+                <TrendingUp className="w-5 h-5 text-amber-700" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-white">System Analytics</h2>
-                <p className="text-xs text-gray-400">Incident trends and statistics</p>
+                <h2 className="text-base font-bold text-slate-900">System Analytics</h2>
+                <p className="text-xs text-slate-500">Incident trends and statistics</p>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Daily Incidents */}
               <div>
-                <h3 className="text-sm font-medium text-gray-400 mb-3">Daily Incident Count</h3>
+                <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">Daily Incident Count</h3>
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={dailyIncidents}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                    <XAxis dataKey="day" stroke="#6b7280" style={{ fontSize: '12px' }} />
-                    <YAxis stroke="#6b7280" style={{ fontSize: '12px' }} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="day" stroke="#94a3b8" style={{ fontSize: '12px' }} />
+                    <YAxis stroke="#94a3b8" style={{ fontSize: '12px' }} />
                     <Tooltip
                       contentStyle={{
-                        backgroundColor: '#0F1825',
-                        border: '1px solid #374151',
-                        borderRadius: '8px'
+                        backgroundColor: '#ffffff',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '12px',
+                        boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
                       }}
-                      labelStyle={{ color: '#fff' }}
+                      labelStyle={{ color: '#0f172a', fontWeight: 'bold' }}
                     />
-                    <Bar dataKey="count" fill="#3B82F6" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="count" fill="#F59E0B" radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
 
               {/* Response time unavailable */}
               <div>
-                <h3 className="text-sm font-medium text-gray-400 mb-3">Average Response Time</h3>
-                <div className="flex h-[200px] items-center justify-center rounded-lg border border-gray-800 bg-[#0B1220]/50 text-sm text-gray-500">
+                <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">Average Response Time</h3>
+                <div className="flex h-[200px] items-center justify-center rounded-xl border border-slate-100 bg-amber-50/20 text-xs text-slate-400 font-medium p-4 text-center">
                   Response timestamps are not available.
                 </div>
               </div>
             </div>
 
             {/* Common Incidents */}
-            <div className="mt-6">
-              <h3 className="text-sm font-medium text-gray-400 mb-3">Common Medical Incidents</h3>
-              <div className="space-y-2">
+            <div className="mt-6 pt-6 border-t border-slate-100">
+              <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">Common Medical Incidents</h3>
+              <div className="space-y-3">
                 {incidentTypeCounts.map((item) => (
                   <div key={item.type} className="flex items-center gap-3">
                     <div className="flex-1 flex items-center gap-3">
-                      <span className="text-sm text-gray-300 w-32">{item.type}</span>
-                      <div className="flex-1 bg-gray-800 rounded-full h-2">
+                      <span className="text-sm font-medium text-slate-700 w-32 truncate">{item.type}</span>
+                      <div className="flex-1 bg-slate-100 rounded-full h-2.5 overflow-hidden">
                         <div
-                          className="bg-gradient-to-r from-[#3B82F6] to-[#FF3B30] h-2 rounded-full transition-all"
+                          className="bg-amber-500 h-2.5 rounded-full transition-all"
                           style={{ width: `${Math.min((item.count / Math.max(incidents.length, 1)) * 100, 100)}%` }}
                         ></div>
                       </div>
                       {!loading && !error && incidentTypeCounts.length === 0 && (
-                        <p className="text-sm text-gray-500">No incident statistics available.</p>
+                        <p className="text-xs text-slate-400">No incident statistics available.</p>
                       )}
                     </div>
-                    <span className="text-sm font-semibold text-white w-8 text-right">{item.count}</span>
+                    <span className="text-sm font-bold text-slate-900 w-8 text-right">{item.count}</span>
                   </div>
                 ))}
               </div>
@@ -256,67 +258,69 @@ export function Dashboard() {
 
         {/* Right Column */}
         <div className="space-y-6">
-          {/* Responder Management */}
-          <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-6">
+          {/* Responder Management - Filtered to Available Only */}
+          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
             <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-[#22C55E]/20 rounded-lg flex items-center justify-center">
-                  <Users className="w-5 h-5 text-[#22C55E]" />
+                <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+                  <Users className="w-5 h-5 text-emerald-600" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-semibold text-white">Responders</h2>
-                  <p className="text-xs text-gray-400">Medical response team</p>
+                  <h2 className="text-base font-bold text-slate-900">Available Responders</h2>
+                  <p className="text-xs text-slate-500">Medical response team ready</p>
                 </div>
               </div>
-              <Badge className="bg-[#22C55E]/20 text-[#22C55E] border-[#22C55E]/50">
+              <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 font-bold px-2.5 py-0.5">
                 {availableResponders.length} Available
               </Badge>
             </div>
             <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
-              {responders.map((responder) => (
+              {availableResponders.map((responder) => (
                 <ResponderCard
                   key={responder.id}
                   responder={responder}
                 />
               ))}
-              {!loading && !error && responders.length === 0 && (
-                <p className="py-4 text-center text-sm text-gray-400">No responders found.</p>
+              {!loading && !error && availableResponders.length === 0 && (
+                <p className="py-4 text-center text-xs text-slate-400">No available responders found.</p>
               )}
             </div>
           </Card>
 
           {/* Emergency Communication */}
-          <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-6">
+          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
             <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 bg-[#3B82F6]/20 rounded-lg flex items-center justify-center">
-                <Radio className="w-5 h-5 text-[#3B82F6]" />
+              <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
+                <Radio className="w-5 h-5 text-blue-600" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-white">Communication</h2>
-                <p className="text-xs text-gray-400">Broadcast integration is not configured</p>
+                <h2 className="text-base font-bold text-slate-900">Communication</h2>
+                <p className="text-xs text-slate-500">Broadcast integration is not configured</p>
               </div>
             </div>
-            <div className="rounded-lg border border-gray-800 bg-[#0B1220]/50 p-4 text-sm text-gray-400">
+            <div className="rounded-xl border border-slate-100 bg-amber-50/30 p-4 text-xs text-slate-500 font-medium leading-relaxed">
               Emergency broadcasts are unavailable until a delivery service is connected.
             </div>
           </Card>
 
           {/* Camera Identification */}
-          <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-6">
+          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
             <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 bg-[#FACC15]/20 rounded-lg flex items-center justify-center">
-                <Camera className="w-5 h-5 text-[#FACC15]" />
+              <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
+                <Camera className="w-5 h-5 text-amber-700" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-white">Camera Feed</h2>
-                <p className="text-xs text-gray-400">Camera integration is not configured</p>
+                <h2 className="text-base font-bold text-slate-900">Camera Feed</h2>
+                <p className="text-xs text-slate-500">Camera integration is not configured</p>
               </div>
             </div>
             <div className="space-y-3">
-              <div className="aspect-video bg-[#0B1220] rounded-lg border border-gray-800 flex items-center justify-center">
-                <Camera className="w-12 h-12 text-gray-700" />
+              <div className="aspect-video bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-center">
+                <Card className="w-12 h-12 text-slate-700 flex items-center justify-center border-0 bg-transparent shadow-none">
+                  <Camera className="w-10 h-10 text-slate-600" />
+                </Card>
               </div>
-              <p className="text-xs text-gray-500">No camera feed is connected.</p>
+              <p className="text-xs text-slate-400 text-center">No camera feed is connected.</p>
             </div>
           </Card>
         </div>

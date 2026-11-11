@@ -12,36 +12,36 @@ export function ResponderCard({ responder }: ResponderCardProps) {
   const isOffline = statusStr === 'offline';
 
   const badgeColor = isAvailable
-    ? 'bg-green-500/20 text-green-400 border-green-500/30'
+    ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
     : isOffline
-    ? 'bg-gray-500/20 text-gray-400 border-gray-500/30'
-    : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
+    ? 'bg-slate-100 text-slate-600 border-slate-200'
+    : 'bg-amber-100 text-amber-800 border-amber-200';
 
   return (
-    <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-5 space-y-4 hover:border-gray-700 transition-all">
+    <Card className="bg-white border-amber-200/60 shadow-sm p-5 space-y-4 hover:shadow-md transition-all rounded-2xl">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/30 flex items-center justify-center flex-shrink-0 text-blue-400">
+          <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center flex-shrink-0 text-emerald-600">
             <User className="w-5 h-5" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-white font-semibold text-sm truncate">{responder.name || 'Unnamed Staff'}</h3>
-            <p className="text-xs text-blue-400 font-mono mt-0.5 truncate">{responder.department || 'Clinic Staff'}</p>
+            <h3 className="text-slate-900 font-bold text-sm truncate">{responder.name || 'Unnamed Staff'}</h3>
+            <p className="text-xs text-emerald-600 font-mono mt-0.5 truncate">{responder.department || 'Clinic Staff'}</p>
           </div>
         </div>
-        <Badge className={`${badgeColor} text-[10px] font-medium uppercase flex-shrink-0`}>
+        <Badge className={`${badgeColor} text-[10px] font-bold uppercase flex-shrink-0`}>
           {statusStr}
         </Badge>
       </div>
 
-      <div className="space-y-2 text-xs text-gray-300 pt-2 border-t border-gray-800/80">
+      <div className="space-y-2 text-xs text-slate-600 pt-3 border-t border-slate-100">
         <div className="flex items-center gap-2">
-          <Phone className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
+          <Phone className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
           <span className="truncate">{responder.contact_number || responder.phone || 'No contact provided'}</span>
         </div>
         <div className="flex items-center gap-2">
-          <Shield className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
-          <span className="capitalize text-gray-400">Role: <strong className="text-white">{responder.user_type || 'Responder'}</strong></span>
+          <Shield className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+          <span className="text-slate-500">Role: <strong className="text-slate-900 font-bold">{responder.user_type || 'Responder'}</strong></span>
         </div>
       </div>
     </Card>

@@ -2,9 +2,7 @@ import { lazy, Suspense, useMemo } from 'react';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import { DashboardLayout } from './components/DashboardLayout';
 import { ActiveIncidents } from './pages/ActiveIncidents';
-import { EmergencyReports } from './pages/EmergencyReports';
 import { IncidentLogs } from './pages/IncidentLogs';
-import { MapTracking } from './pages/MapTracking';
 import { Notifications } from './pages/Notifications';
 import { Responders } from './pages/Responders';
 import { Settings } from './pages/Settings';
@@ -36,8 +34,6 @@ export default function AdminDashboard({ displayName, onLogout }: AdminDashboard
               ),
             },
             { path: 'active-incidents', element: <ActiveIncidents /> },
-            { path: 'emergency-reports', element: <EmergencyReports /> },
-            { path: 'map-tracking', element: <MapTracking /> },
             { path: 'responders', element: <Responders /> },
             { path: 'users', element: <Users /> },
             { path: 'incident-logs', element: <IncidentLogs /> },

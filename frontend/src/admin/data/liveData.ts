@@ -140,10 +140,15 @@ export function mapIncidents(data: SupabaseOverview): Incident[] {
     const lng = Number(location?.longitude);
     const responders = assignments.get(key(row.incident_id));
 
+    // Preserve full name or display name for other screens, and expose reporterUsername separately
+    const reporterName = text(user?.name ?? user?.username, `User ${text(row.user_id)}`);
+    const reporterUsername = text(user?.username ?? user?.user_name, 'anonymous');
+
     return {
       id: text(row.incident_id),
       type: text(type?.incident_name, 'Incident'),
-      reporterName: text(user?.name ?? user?.username, `User ${text(row.user_id)}`),
+      reporterName,
+      reporterUsername,
       building: locationDescription || text(location?.building),
       location: locationDescription ? '' : text(location?.room),
       timeReported: relativeTime(row.reported_at),
@@ -202,7 +207,7 @@ export function mapLogs(data: SupabaseOverview): IncidentLog[] {
     return {
       id: text(row.log_id),
       incidentType: incident?.type ?? `Incident ${incidentId}`,
-      reporter: incident?.reporterName ?? '—',
+      reporter: (incident as any)?.reporterUsername ?? incident?.reporterName ?? '—',
       building: incident?.building ?? '—',
       date: occurred?.toLocaleDateString() ?? '—',
       time: occurred?.toLocaleTimeString() ?? '—',

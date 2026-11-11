@@ -127,14 +127,14 @@ export function Responders() {
       <DataNotice loading={loading} error={error} />
      
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-amber-200/50 shadow-sm">
         <div>
-          <h1 className="text-2xl font-bold text-white mb-1">Clinic Staff Directory</h1>
-          <p className="text-gray-400 text-sm">Manage clinic personnel and staff availability</p>
+          <h1 className="text-2xl font-extrabold text-slate-900 mb-1">Clinic Staff Directory</h1>
+          <p className="text-slate-700 text-sm font-semibold">Manage clinic personnel and staff availability</p>
         </div>
         <Button
           onClick={() => setIsModalOpen(true)}
-          className="bg-[#3B82F6] hover:bg-blue-600 text-white flex items-center gap-2 w-fit shadow-md shadow-blue-500/10 text-xs"
+          className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2 w-fit shadow-md text-xs font-bold rounded-xl"
         >
           <UserPlus className="w-4 h-4" />
           Add Clinic Staff
@@ -143,43 +143,51 @@ export function Responders() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 p-5">
+        <Card className="bg-white border-amber-200/60 shadow-md p-5 rounded-2xl">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Total Team</p>
-              <p className="text-3xl font-bold text-white">{responders.length}</p>
+              <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Total Team</p>
+              <p className="text-3xl font-extrabold text-slate-900">{responders.length}</p>
             </div>
-            <Users className="w-8 h-8 text-gray-400" />
+            <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center">
+              <Users className="w-6 h-6 text-slate-600" />
+            </div>
           </div>
         </Card>
 
-        <Card className="bg-gradient-to-br from-[#22C55E]/20 to-[#22C55E]/5 border-[#22C55E]/30 p-5">
+        <Card className="bg-white border-emerald-200 shadow-md p-5 rounded-2xl">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Available</p>
-              <p className="text-3xl font-bold text-white">{availableCount}</p>
+              <p className="text-emerald-700 text-xs font-semibold uppercase tracking-wider mb-1">Available</p>
+              <p className="text-3xl font-extrabold text-slate-900">{availableCount}</p>
             </div>
-            <Users className="w-8 h-8 text-[#22C55E]" />
+            <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center">
+              <Users className="w-6 h-6 text-emerald-600" />
+            </div>
           </div>
         </Card>
 
-        <Card className="bg-gradient-to-br from-[#FACC15]/20 to-[#FACC15]/5 border-[#FACC15]/30 p-5">
+        <Card className="bg-white border-amber-300 shadow-md p-5 rounded-2xl">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Busy</p>
-              <p className="text-3xl font-bold text-white">{assignedCount}</p>
+              <p className="text-amber-800 text-xs font-semibold uppercase tracking-wider mb-1">Busy</p>
+              <p className="text-3xl font-extrabold text-slate-900">{assignedCount}</p>
             </div>
-            <Users className="w-8 h-8 text-[#FACC15]" />
+            <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
+              <Users className="w-6 h-6 text-amber-700" />
+            </div>
           </div>
         </Card>
 
-        <Card className="bg-gradient-to-br from-gray-500/20 to-gray-500/5 border-gray-500/30 p-5">
+        <Card className="bg-white border-slate-200 shadow-md p-5 rounded-2xl">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1">Offline</p>
-              <p className="text-3xl font-bold text-white">{offlineCount}</p>
+              <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Offline</p>
+              <p className="text-3xl font-extrabold text-slate-900">{offlineCount}</p>
             </div>
-            <Users className="w-8 h-8 text-gray-500" />
+            <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center">
+              <Users className="w-6 h-6 text-slate-500" />
+            </div>
           </div>
         </Card>
       </div>
@@ -188,11 +196,11 @@ export function Responders() {
       <div className="space-y-6">
         <div>
           <div className="flex items-center gap-3 mb-4">
-            <Badge className="bg-[#22C55E]/20 text-[#22C55E] border-[#22C55E]/50">
-              <div className="w-2 h-2 bg-[#22C55E] rounded-full animate-pulse mr-2"></div>
+            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 font-bold px-3 py-1">
+              <div className="w-2 h-2 bg-emerald-600 rounded-full animate-pulse mr-2"></div>
               Available
             </Badge>
-            <span className="text-sm text-gray-400">{availableCount} staff ready</span>
+            <span className="text-sm font-semibold text-slate-700">{availableCount} staff ready</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {responders
@@ -205,11 +213,11 @@ export function Responders() {
 
         <div>
           <div className="flex items-center gap-3 mb-4">
-            <Badge className="bg-[#FACC15]/20 text-[#FACC15] border-[#FACC15]/50">
-              <div className="w-2 h-2 bg-[#FACC15] rounded-full animate-pulse mr-2"></div>
+            <Badge className="bg-amber-100 text-amber-800 border-amber-200 font-bold px-3 py-1">
+              <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse mr-2"></div>
               Busy
             </Badge>
-            <span className="text-sm text-gray-400">{assignedCount} staff active</span>
+            <span className="text-sm font-semibold text-slate-700">{assignedCount} staff active</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {responders
@@ -222,11 +230,11 @@ export function Responders() {
 
         <div>
           <div className="flex items-center gap-3 mb-4">
-            <Badge className="bg-gray-500/20 text-gray-400 border-gray-500/50">
-              <div className="w-2 h-2 bg-gray-500 rounded-full mr-2"></div>
+            <Badge className="bg-slate-100 text-slate-700 border-slate-200 font-bold px-3 py-1">
+              <div className="w-2 h-2 bg-slate-400 rounded-full mr-2"></div>
               Offline
             </Badge>
-            <span className="text-sm text-gray-400">{offlineCount} staff offline</span>
+            <span className="text-sm font-semibold text-slate-700">{offlineCount} staff offline</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {responders
@@ -239,21 +247,21 @@ export function Responders() {
       </div>
 
       {!loading && responders.length === 0 && (
-        <Card className="bg-[#0F1825]/80 backdrop-blur-sm border-gray-800 py-12 text-center text-gray-400">
-          <AlertCircle className="w-12 h-12 mx-auto mb-3 text-gray-600 stroke-1" />
-          <p className="text-base font-medium">No clinic staff registered yet.</p>
+        <Card className="bg-white border-amber-200/60 shadow-md py-12 text-center text-slate-500 rounded-2xl">
+          <AlertCircle className="w-12 h-12 mx-auto mb-3 text-slate-400 stroke-1" />
+          <p className="text-base font-bold text-slate-900">No clinic staff registered yet.</p>
         </Card>
       )}
 
       {/* Add Clinic Staff Modal Form */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <Card className="bg-[#0F1825] border-gray-800 w-full max-w-lg p-6 space-y-6 relative shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-800 pb-4">
-              <h2 className="text-lg font-bold text-white">Add New Clinic Staff</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <Card className="bg-white border-amber-200 text-slate-900 w-full max-w-lg p-6 space-y-6 relative shadow-2xl rounded-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <h2 className="text-lg font-bold text-slate-900">Add New Clinic Staff</h2>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-gray-400 hover:text-white transition-colors"
+                className="text-slate-400 hover:text-slate-700 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -261,31 +269,31 @@ export function Responders() {
 
             <form onSubmit={handleAddResponder} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">Full Name *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Full Name *</label>
                 <input
                   type="text"
                   required
                   placeholder="e.g., Nurse Maria Santos"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600"
                 />
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1">Email Address *</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Email Address *</label>
                   <input
                     type="email"
                     required
                     placeholder="maria@clinic.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1">Password * (For Login)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Password * (For Login)</label>
                   <input
                     type="password"
                     required
@@ -293,41 +301,41 @@ export function Responders() {
                     placeholder="Min. 6 characters"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">Department / Unit *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Department / Unit *</label>
                 <input
                   type="text"
                   required
                   placeholder="e.g., University Clinic / Medical Team"
                   value={department}
                   onChange={(e) => setDepartment(e.target.value)}
-                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">Contact Number *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Contact Number *</label>
                 <input
                   type="text"
                   required
                   placeholder="e.g., 09123456789"
                   value={contactNumber}
                   onChange={(e) => setContactNumber(e.target.value)}
-                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">Initial Status</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Initial Status</label>
                 <select
                   value={availabilityStatus}
                   onChange={(e) => setAvailabilityStatus(e.target.value)}
-                  className="w-full bg-[#0B1220] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#3B82F6]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 cursor-pointer"
                 >
                   <option value="available">Available</option>
                   <option value="busy">Busy</option>
@@ -335,19 +343,19 @@ export function Responders() {
                 </select>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-800">
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() => setIsModalOpen(false)}
-                  className="border-gray-700 text-gray-300 hover:bg-gray-800 text-xs"
+                  className="border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold rounded-xl"
                 >
                   Cancel
                 </Button>
                 <Button
                   type="submit"
                   disabled={submitting}
-                  className="bg-[#3B82F6] hover:bg-blue-600 text-white text-xs flex items-center gap-2"
+                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-2 rounded-xl shadow-sm"
                 >
                   {submitting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
                   Save Clinic Staff
