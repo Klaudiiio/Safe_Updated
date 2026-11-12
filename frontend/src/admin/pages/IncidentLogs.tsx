@@ -35,7 +35,7 @@ export function IncidentLogs() {
         normalizedStatus = 'PENDING';
       }
 
-      // Extract specific attributes safely, directly prioritizing the reporting user's username
+      // Extract specific attributes safely
       const incidentType = matchingIncident?.type || item.type || 'Medical Emergency';
       const reporter =
         matchingIncident?.reporterUsername ||
@@ -50,7 +50,7 @@ export function IncidentLogs() {
       const timestamp = item.timestamp || item.time || matchingIncident?.reportedAt || item.date || 'Today';
       const building = matchingIncident?.building || item.building || 'Main Campus';
       const floor = matchingIncident?.floor || item.floor || matchingIncident?.location || 'Floor 1';
-      const responders = matchingIncident?.assignedResponders || matchingIncident?.assignedResponder || item.responders || item.assignedResponders || 'Unassigned';
+      const priority = matchingIncident?.severity || matchingIncident?.priority || matchingIncident?.priority_level || item.priority || 'urgent';
 
       return {
         id: item.id || index + 1,
@@ -61,20 +61,19 @@ export function IncidentLogs() {
         timestamp,
         building,
         floor,
-        responders: Array.isArray(responders) ? responders.join(', ') : String(responders),
         status: normalizedStatus,
+        priority,
       };
     });
   }, [incidents, logs]);
 
-  // Filter logs based on search query and status option
+  // Filter and sort logs applying the strict Critical-first & 5-to-1 interleaving rule
   const filteredLogs = useMemo(() => {
-    return dataSource.filter((item: any) => {
+    const searchedAndFiltered = dataSource.filter((item: any) => {
       const idStr = String(item.incidentId || '');
       const typeStr = String(item.type || '');
       const reporterStr = String(item.reporter || '');
       const buildingStr = String(item.building || '');
-      const respondersStr = String(item.responders || '');
       const statusStr = String(item.status || '');
 
       const matchesSearch =
@@ -82,7 +81,6 @@ export function IncidentLogs() {
         typeStr.toLowerCase().includes(searchTerm.toLowerCase()) ||
         reporterStr.toLowerCase().includes(searchTerm.toLowerCase()) ||
         buildingStr.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        respondersStr.toLowerCase().includes(searchTerm.toLowerCase()) ||
         statusStr.toLowerCase().includes(searchTerm.toLowerCase());
 
       const matchesStatus =
@@ -91,6 +89,46 @@ export function IncidentLogs() {
 
       return matchesSearch && matchesStatus;
     });
+
+    // Sort with Critical/Urgent priority rules and 5-to-1 interleaving pattern
+    const isStrictlyCritical = (inc: any) => {
+      const p = (inc.priority || '').toLowerCase();
+      const t = (inc.type || '').toLowerCase();
+      return p === 'critical' || t.includes('critical');
+    };
+
+    const isHighOrUrgent = (inc: any) => {
+      const p = (inc.priority || '').toLowerCase();
+      const t = (inc.type || '').toLowerCase();
+      return p === 'urgent' || p === 'high' || t.includes('urgent') || t.includes('severe');
+    };
+
+    const strictCriticalList = searchedAndFiltered.filter(isStrictlyCritical);
+    const urgentOrHighList = searchedAndFiltered.filter((inc: any) => !isStrictlyCritical(inc) && isHighOrUrgent(inc));
+    const lowList = searchedAndFiltered.filter((inc: any) => !isStrictlyCritical(inc) && !isHighOrUrgent(inc));
+
+    const criticalList = [...strictCriticalList, ...urgentOrHighList];
+
+    const result: any[] = [];
+    let critIndex = 0;
+    let lowIndex = 0;
+
+    while (critIndex < criticalList.length || lowIndex < lowList.length) {
+      const criticalChunk = criticalList.slice(critIndex, critIndex + 5);
+      if (criticalChunk.length > 0) {
+        result.push(...criticalChunk);
+        critIndex += criticalChunk.length;
+      }
+
+      if (lowIndex < lowList.length) {
+        result.push(lowList[lowIndex]);
+        lowIndex += 1;
+      } else if (criticalChunk.length === 0) {
+        break;
+      }
+    }
+
+    return result;
   }, [dataSource, searchTerm, statusFilter]);
 
   // Statistics summaries
@@ -109,11 +147,11 @@ export function IncidentLogs() {
     return Object.keys(counts).reduce((a, b) => (counts[a] > counts[b] ? a : b), 'None');
   }, [incidents]);
 
-  // Handle Export Logs to CSV with expanded granular headers
+  // Handle Export Logs to CSV
   const handleExportCSV = () => {
     if (!filteredLogs.length) return;
 
-    const headers = ['Incident ID', 'Incident Type', 'Reporter', 'Timestamp', 'Building & Floor', 'Responders', 'Status'];
+    const headers = ['Incident ID', 'Incident Type', 'Reporter', 'Timestamp', 'Building & Floor', 'Status'];
     const csvRows = [
       headers.join(','),
       ...filteredLogs.map((item: any) => {
@@ -123,7 +161,6 @@ export function IncidentLogs() {
           `"${item.reporter}"`,
           `"${item.timestamp}"`,
           `"${item.building} ${item.floor}"`,
-          `"${item.responders}"`,
           `"${item.status}"`,
         ].join(',');
       }),
@@ -143,11 +180,11 @@ export function IncidentLogs() {
       <DataNotice loading={loading} error={error} />
 
       {/* Page Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-amber-200/50 shadow-sm">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-sky-100 shadow-sm">
         <div>
           <h1 className="text-2xl font-extrabold text-slate-900 mb-1">Incident Logs & Records</h1>
           <p className="text-slate-700 text-sm font-semibold">
-            Detailed tracking of reporters, occurrence times, assigned responders, and location logs
+            Detailed tracking of reporters, occurrence times, and location logs
           </p>
         </div>
         <button
@@ -161,13 +198,13 @@ export function IncidentLogs() {
       </div>
 
       {/* Filter and Search Bar */}
-      <Card className="bg-white border-amber-200/60 shadow-md p-4 rounded-2xl">
+      <Card className="bg-white border-sky-100/60 shadow-md p-4 rounded-2xl">
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="relative flex-1 w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="text"
-              placeholder="Search by ID, type, reporter, building, or responder..."
+              placeholder="Search by ID, type, reporter, or building..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium placeholder-slate-400 focus:outline-none focus:border-blue-600 transition-all"
@@ -191,8 +228,8 @@ export function IncidentLogs() {
       </Card>
 
       {/* Analytics Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="bg-white border-amber-200/60 shadow-md p-5 rounded-2xl">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="bg-white border-sky-100/60 shadow-md p-5 rounded-2xl">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Total Incidents</p>
           <p className="text-2xl font-extrabold text-slate-900">{totalIncidents}</p>
           <p className="text-xs text-slate-400 mt-2 font-medium">All time logs</p>
@@ -204,21 +241,15 @@ export function IncidentLogs() {
           <p className="text-xs text-slate-400 mt-2 font-medium">Successfully closed</p>
         </Card>
 
-        <Card className="bg-white border-blue-200 shadow-md p-5 rounded-2xl">
-          <p className="text-xs font-semibold text-blue-700 uppercase tracking-wider mb-1">Avg Response Time</p>
-          <p className="text-2xl font-extrabold text-blue-600">Not tracked</p>
-          <p className="text-xs text-slate-400 mt-2 font-medium">Duration unavailable</p>
-        </Card>
-
-        <Card className="bg-white border-amber-300 shadow-md p-5 rounded-2xl">
-          <p className="text-xs font-semibold text-amber-800 uppercase tracking-wider mb-1">Most Common Type</p>
+        <Card className="bg-white border-sky-200 shadow-md p-5 rounded-2xl">
+          <p className="text-xs font-semibold text-sky-800 uppercase tracking-wider mb-1">Most Common Type</p>
           <p className="text-lg font-extrabold text-slate-900 truncate">{mostCommonType}</p>
           <p className="text-xs text-slate-400 mt-2 font-medium">Based on active logs</p>
         </Card>
       </div>
 
       {/* Logs Table */}
-      <Card className="bg-white border-amber-200/60 shadow-md rounded-2xl overflow-hidden">
+      <Card className="bg-white border-sky-100/60 shadow-md rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -228,7 +259,6 @@ export function IncidentLogs() {
                 <th className="px-6 py-4">Reporter</th>
                 <th className="px-6 py-4">When It Happened</th>
                 <th className="px-6 py-4">Building & Floor</th>
-                <th className="px-6 py-4">Responders</th>
                 <th className="px-6 py-4">Status</th>
               </tr>
             </thead>
@@ -255,13 +285,6 @@ export function IncidentLogs() {
                       <div className="font-bold text-slate-900">{item.building}</div>
                       <div className="text-slate-500">{item.floor}</div>
                     </td>
-                    <td className="px-6 py-4 text-xs text-slate-600 font-medium">
-                      {item.responders && item.responders !== 'Unassigned' ? (
-                        <span className="text-emerald-700 font-bold">{item.responders}</span>
-                      ) : (
-                        <span className="text-slate-400 italic">Unassigned</span>
-                      )}
-                    </td>
                     <td className="px-6 py-4">
                       <Badge
                         className={
@@ -270,7 +293,7 @@ export function IncidentLogs() {
                             : isAssigned
                             ? 'bg-blue-100 text-blue-700 border-blue-200 font-bold'
                             : isPending
-                            ? 'bg-amber-100 text-amber-800 border-amber-200 font-bold'
+                            ? 'bg-sky-100 text-sky-800 border-sky-200 font-bold'
                             : 'bg-red-100 text-red-700 border-red-200 font-bold'
                         }
                       >
@@ -282,7 +305,7 @@ export function IncidentLogs() {
               })}
               {!loading && filteredLogs.length === 0 && (
                 <tr className="hover:bg-transparent">
-                  <td colSpan={7} className="py-12 text-center text-slate-500">
+                  <td colSpan={6} className="py-12 text-center text-slate-500">
                     <FileText className="w-12 h-12 mx-auto mb-3 text-slate-400 stroke-1" />
                     <p className="text-base font-bold text-slate-900">No matching incident logs.</p>
                     <p className="text-xs text-slate-500 mt-1 font-medium">

@@ -102,7 +102,7 @@ export function Users() {
       <DataNotice loading={loading} error={error} />
      
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-amber-200/50 shadow-sm">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-sky-100 shadow-sm">
         <div>
           <h1 className="text-2xl font-extrabold text-slate-900 mb-1">User Management</h1>
           <p className="text-slate-700 text-sm font-semibold">Add, manage, and remove standard platform users</p>
@@ -118,7 +118,7 @@ export function Users() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className="bg-white border-amber-200/60 shadow-md p-5 rounded-2xl">
+        <Card className="bg-white border-sky-100/60 shadow-md p-5 rounded-2xl">
           <div className="flex items-start justify-between">
             <div>
               <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Total Users</p>
@@ -158,7 +158,7 @@ export function Users() {
       </div>
 
       {/* Search */}
-      <Card className="bg-white border-amber-200/60 shadow-md p-4 rounded-2xl">
+      <Card className="bg-white border-sky-100/60 shadow-md p-4 rounded-2xl">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <Input
@@ -172,7 +172,7 @@ export function Users() {
       </Card>
 
       {/* Users Table */}
-      <Card className="bg-white border-amber-200/60 shadow-md rounded-2xl overflow-hidden">
+      <Card className="bg-white border-sky-100/60 shadow-md rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
@@ -250,7 +250,7 @@ export function Users() {
       {/* Add User Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <Card className="bg-white border-amber-200 text-slate-900 w-full max-w-md p-6 space-y-6 relative shadow-2xl rounded-2xl">
+          <Card className="bg-white border-sky-100 text-slate-900 w-full max-w-md p-6 space-y-6 relative shadow-2xl rounded-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <h2 className="text-lg font-bold text-slate-900">Add New User</h2>
               <button

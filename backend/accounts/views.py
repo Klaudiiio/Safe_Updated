@@ -4,7 +4,9 @@ import time
 import requests
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
+from django.core.mail import send_mail
 from rest_framework import generics, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -21,6 +23,9 @@ from .utils import SupabaseNotConfigured, SupabaseRequestFailed, sync_user_to_su
 
 logger = logging.getLogger(__name__)
 
+# Temporary storage for password reset OTPs (In production, replace with django.core.cache / Redis)
+OTP_STORAGE = {}
+
 
 class LoginView(TokenObtainPairView):
     """
@@ -30,13 +35,13 @@ class LoginView(TokenObtainPairView):
 
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
-        
+       
         if response.status_code == 200:
             username = request.data.get("username")
             try:
                 user = User.objects.get(username=username)
                 profile = user.profile
-                
+               
                 sync_user_to_supabase(user, profile)
                 response.data["supabase_synced"] = True
                 response.data["sync_warning"] = None
@@ -58,7 +63,7 @@ class LoginView(TokenObtainPairView):
                 else:
                     response.data["supabase_synced"] = False
                     response.data["sync_warning"] = err_str
-                
+               
         return response
 
 
@@ -71,13 +76,13 @@ class MobileLoginView(TokenObtainPairView):
 
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
-        
+       
         if response.status_code == 200:
             username = request.data.get("username")
             try:
                 user = User.objects.get(username=username)
                 profile = user.profile
-                
+               
                 sync_user_to_supabase(user, profile)
                 response.data["supabase_synced"] = True
                 response.data["sync_warning"] = None
@@ -99,7 +104,7 @@ class MobileLoginView(TokenObtainPairView):
                 else:
                     response.data["supabase_synced"] = False
                     response.data["sync_warning"] = err_str
-                
+               
         return response
 
 
@@ -193,6 +198,107 @@ class RegisterView(generics.CreateAPIView):
         }, status=201)
 
 
+class PasswordResetRequestView(APIView):
+    """
+    Step 1: Generates and dispatches a 6-digit OTP code to the user's target (Email/Gmail or Phone).
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        method = request.data.get('method') # 'email' or 'phone'
+        target = request.data.get('target') # gmail address or phone number
+
+        if not target:
+            return Response({'detail': 'Target field is required.'}, status=400)
+
+        UserModel = get_user_model()
+        try:
+            if method == 'email':
+                user = UserModel.objects.filter(email=target).first()
+            else:
+                user = UserModel.objects.filter(profile__phone_number=target).first()
+
+            if not user:
+                # Return 404 or generic success message to prevent user enumeration
+                return Response({'detail': 'No account associated with this target found.'}, status=404)
+
+            otp_code = str(random.randint(100000, 999999))
+            OTP_STORAGE[target] = otp_code
+
+            if method == 'email':
+                send_mail(
+                    subject='SAFE:MEAS Password Reset Verification Code',
+                    message=f'Your verification code is: {otp_code}',
+                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@safe-meas.local'),
+                    recipient_list=[target],
+                )
+            else:
+                # Log or integrate SMS gateway here
+                logger.info(f"SMS OTP for {target}: {otp_code}")
+
+            return Response({'detail': 'OTP code sent successfully.'}, status=200)
+        except Exception as e:
+            return Response({'detail': str(e)}, status=500)
+
+
+class VerifyOtpView(APIView):
+    """
+    Step 2: Validates the 6-digit OTP code entered by the user.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        target = request.data.get('target')
+        otp = request.data.get('otp')
+
+        if not target or not otp:
+            return Response({'detail': 'Target and OTP are required.'}, status=400)
+
+        stored_otp = OTP_STORAGE.get(target)
+        if not stored_otp or stored_otp != otp:
+            return Response({'detail': 'Invalid or expired OTP code.'}, status=400)
+
+        return Response({'detail': 'OTP verified successfully.'}, status=200)
+
+
+class ConfirmPasswordResetView(APIView):
+    """
+    Step 3: Confirms OTP and updates the user's password securely.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        target = request.data.get('target')
+        otp = request.data.get('otp')
+        new_password = request.data.get('new_password')
+
+        if not target or not otp or not new_password:
+            return Response({'detail': 'All fields are required.'}, status=400)
+
+        if len(new_password.strip()) < 6:
+            return Response({'detail': 'Password must be at least 6 characters long.'}, status=400)
+
+        stored_otp = OTP_STORAGE.get(target)
+        if not stored_otp or stored_otp != otp:
+            return Response({'detail': 'Invalid or expired OTP session.'}, status=400)
+
+        UserModel = get_user_model()
+        try:
+            user = UserModel.objects.filter(email=target).first() or UserModel.objects.filter(profile__phone_number=target).first()
+            if not user:
+                return Response({'detail': 'User not found.'}, status=404)
+
+            user.set_password(new_password)
+            user.save()
+
+            # Clear stored OTP session
+            OTP_STORAGE.pop(target, None)
+
+            return Response({'detail': 'Password updated successfully.'}, status=200)
+        except Exception as e:
+            return Response({'detail': str(e)}, status=500)
+
+
 class CreateUserView(APIView):
     permission_classes = [permissions.IsAdminUser]
 
@@ -221,7 +327,7 @@ class CreateUserView(APIView):
                 email=email,
             )
             user.set_password(password)
-            
+           
             if hasattr(user, 'profile'):
                 user.profile.name = name
                 user.profile.phone_number = phone_number
@@ -318,7 +424,7 @@ class CreateClinicStaffView(APIView):
                 is_staff=True
             )
             user.set_password(password)
-            
+           
             if hasattr(user, 'profile'):
                 user.profile.name = name
                 user.profile.phone_number = contact_number
@@ -330,7 +436,7 @@ class CreateClinicStaffView(APIView):
             sync_warning = None
             supabase_url = getattr(settings, 'SUPABASE_URL', None)
             service_key = getattr(settings, 'SUPABASE_SERVICE_ROLE_KEY', None)
-            
+           
             if supabase_url and service_key:
                 try:
                     sync_user_to_supabase(user, user.profile)
@@ -348,14 +454,14 @@ class CreateClinicStaffView(APIView):
                         "availability_status": availability_status.lower(),
                         "user_type": role.lower().replace(' ', '_')
                     }
-                    
+                   
                     res = requests.post(
                         f"{supabase_url.rstrip('/')}/rest/v1/responder",
                         json=payload,
                         headers=headers,
                         timeout=10
                     )
-                    
+                   
                     if res.status_code >= 400:
                         res = requests.post(
                             f"{supabase_url.rstrip('/')}/rest/v1/responders",
@@ -367,11 +473,9 @@ class CreateClinicStaffView(APIView):
                     if res.status_code >= 400:
                         supabase_synced = False
                         sync_warning = f"Responder Table Error [{res.status_code}]: {res.text}"
-                        print("❌ SUPABASE RESPONDER SYNC ERROR:", sync_warning)
                 except Exception as sub_exc:
                     supabase_synced = False
                     sync_warning = str(sub_exc)
-                    print("❌ SUPABASE EXCEPTION:", sync_warning)
 
             return Response({
                 "message": f"Staff member '{username}' created successfully.",
@@ -426,7 +530,7 @@ class IncidentListView(APIView):
                 return Response({"error": f"Supabase error: {res.text}"}, status=res.status_code)
 
             raw_data = res.json()
-            
+           
             formatted_results = []
             for item in raw_data:
                 incident_type_name = "Incident"
@@ -446,5 +550,4 @@ class IncidentListView(APIView):
 
             return Response(formatted_results)
         except Exception as e:
-            print("❌ SUPABASE INCIDENT FETCH ERROR:", str(e))
             return Response({"error": str(e)}, status=500)

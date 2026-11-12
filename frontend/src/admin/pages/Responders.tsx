@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Users, UserPlus, X, RefreshCw, AlertCircle } from 'lucide-react';
+import { Users, UserPlus, X, RefreshCw, AlertCircle, Trash2 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -18,6 +18,7 @@ export function Responders() {
   const [error, setError] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | number | null>(null);
 
   // Form state for new clinic staff member
   const [name, setName] = useState('');
@@ -89,8 +90,8 @@ export function Responders() {
         department,
         contact_number: contactNumber,
         availability_status: availabilityStatus,
-        user_type: 'clinic_staff', // Hardcoded strictly to clinic_staff
-        role: 'clinic_staff',       // Hardcoded strictly to clinic_staff
+        user_type: 'clinic_staff',
+        role: 'clinic_staff',
       });
       setIsModalOpen(false);
       setName('');
@@ -104,6 +105,38 @@ export function Responders() {
       alert(err instanceof Error ? err.message : 'Failed to create clinic staff member.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // Handle deleting a responder/clinic staff member directly from Supabase
+  const handleDeleteResponder = async (responderId: string | number) => {
+    if (!window.confirm('Are you sure you want to delete this clinic staff member?')) return;
+    if (!supabase) {
+      alert('Supabase client is not initialized.');
+      return;
+    }
+
+    setDeletingId(responderId);
+    try {
+      // Attempt deletion using both possible primary key column names ('responders_id' or 'id')
+      const { error: err1 } = await supabase
+        .from('responder')
+        .delete()
+        .eq('responders_id', responderId);
+
+      if (err1) {
+        const { error: err2 } = await supabase
+          .from('responder')
+          .delete()
+          .eq('id', responderId);
+        if (err2) throw err2;
+      }
+
+      void fetchRespondersDirectly();
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete clinic staff member.');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -127,7 +160,7 @@ export function Responders() {
       <DataNotice loading={loading} error={error} />
      
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-amber-200/50 shadow-sm">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-sky-100 shadow-sm">
         <div>
           <h1 className="text-2xl font-extrabold text-slate-900 mb-1">Clinic Staff Directory</h1>
           <p className="text-slate-700 text-sm font-semibold">Manage clinic personnel and staff availability</p>
@@ -143,7 +176,7 @@ export function Responders() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="bg-white border-amber-200/60 shadow-md p-5 rounded-2xl">
+        <Card className="bg-white border-sky-100/60 shadow-md p-5 rounded-2xl">
           <div className="flex items-start justify-between">
             <div>
               <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Total Team</p>
@@ -167,14 +200,14 @@ export function Responders() {
           </div>
         </Card>
 
-        <Card className="bg-white border-amber-300 shadow-md p-5 rounded-2xl">
+        <Card className="bg-white border-sky-200 shadow-md p-5 rounded-2xl">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-amber-800 text-xs font-semibold uppercase tracking-wider mb-1">Busy</p>
+              <p className="text-sky-800 text-xs font-semibold uppercase tracking-wider mb-1">Busy</p>
               <p className="text-3xl font-extrabold text-slate-900">{assignedCount}</p>
             </div>
-            <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
-              <Users className="w-6 h-6 text-amber-700" />
+            <div className="w-12 h-12 bg-sky-100 rounded-xl flex items-center justify-center">
+              <Users className="w-6 h-6 text-sky-700" />
             </div>
           </div>
         </Card>
@@ -205,9 +238,29 @@ export function Responders() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {responders
               .filter(r => getStatus(r) === 'available')
-              .map((responder: any) => (
-                <ResponderCard key={responder.responders_id || responder.id} responder={responder} />
-              ))}
+              .map((responder: any) => {
+                const responderId = responder.responders_id || responder.id;
+                return (
+                  <div key={responderId} className="relative group">
+                    <ResponderCard responder={responder} />
+                    <button
+                      onClick={() => handleDeleteResponder(responderId)}
+                      disabled={deletingId === responderId}
+                      className="absolute bottom-3 right-3 p-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl shadow-md transition-colors cursor-pointer disabled:opacity-50 z-10 flex items-center gap-1.5 text-xs font-bold"
+                      title="Delete Staff Member"
+                    >
+                      {deletingId === responderId ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Trash2 className="w-4 h-4" />
+                          <span>Delete</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
           </div>
         </div>
 
@@ -222,9 +275,29 @@ export function Responders() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {responders
               .filter(r => getStatus(r) === 'busy')
-              .map((responder: any) => (
-                <ResponderCard key={responder.responders_id || responder.id} responder={responder} />
-              ))}
+              .map((responder: any) => {
+                const responderId = responder.responders_id || responder.id;
+                return (
+                  <div key={responderId} className="relative group">
+                    <ResponderCard responder={responder} />
+                    <button
+                      onClick={() => handleDeleteResponder(responderId)}
+                      disabled={deletingId === responderId}
+                      className="absolute bottom-3 right-3 p-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl shadow-md transition-colors cursor-pointer disabled:opacity-50 z-10 flex items-center gap-1.5 text-xs font-bold"
+                      title="Delete Staff Member"
+                    >
+                      {deletingId === responderId ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Trash2 className="w-4 h-4" />
+                          <span>Delete</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
           </div>
         </div>
 
@@ -239,15 +312,35 @@ export function Responders() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {responders
               .filter(r => getStatus(r) === 'offline')
-              .map((responder: any) => (
-                <ResponderCard key={responder.responders_id || responder.id} responder={responder} />
-              ))}
+              .map((responder: any) => {
+                const responderId = responder.responders_id || responder.id;
+                return (
+                  <div key={responderId} className="relative group">
+                    <ResponderCard responder={responder} />
+                    <button
+                      onClick={() => handleDeleteResponder(responderId)}
+                      disabled={deletingId === responderId}
+                      className="absolute bottom-3 right-3 p-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl shadow-md transition-colors cursor-pointer disabled:opacity-50 z-10 flex items-center gap-1.5 text-xs font-bold"
+                      title="Delete Staff Member"
+                    >
+                      {deletingId === responderId ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Trash2 className="w-4 h-4" />
+                          <span>Delete</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
           </div>
         </div>
       </div>
 
       {!loading && responders.length === 0 && (
-        <Card className="bg-white border-amber-200/60 shadow-md py-12 text-center text-slate-500 rounded-2xl">
+        <Card className="bg-white border-sky-100/60 shadow-md py-12 text-center text-slate-500 rounded-2xl">
           <AlertCircle className="w-12 h-12 mx-auto mb-3 text-slate-400 stroke-1" />
           <p className="text-base font-bold text-slate-900">No clinic staff registered yet.</p>
         </Card>
@@ -256,7 +349,7 @@ export function Responders() {
       {/* Add Clinic Staff Modal Form */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <Card className="bg-white border-amber-200 text-slate-900 w-full max-w-lg p-6 space-y-6 relative shadow-2xl rounded-2xl">
+          <Card className="bg-white border-sky-100 text-slate-900 w-full max-w-lg p-6 space-y-6 relative shadow-2xl rounded-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <h2 className="text-lg font-bold text-slate-900">Add New Clinic Staff</h2>
               <button

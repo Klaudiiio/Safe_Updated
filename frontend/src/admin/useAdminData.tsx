@@ -20,6 +20,10 @@ interface AdminDataState {
   notifications: LiveNotification[];
   loading: boolean;
   error: string | null;
+  updateIncidentStatus: (id: string | number, status: string) => Promise<void>;
+  updateIncident: (id: string | number, updates: any) => Promise<void>;
+  updateStatus: (id: string | number, status: string) => Promise<void>;
+  refetch: () => Promise<void>;
 }
 
 const playAdminAlertSound = () => {
@@ -32,7 +36,7 @@ const playAdminAlertSound = () => {
 };
 
 export function useAdminData(): AdminDataState {
-  const [data, setData] = useState<AdminDataState>({
+  const [data, setData] = useState<Omit<AdminDataState, 'updateIncidentStatus' | 'updateIncident' | 'updateStatus' | 'refetch'>>({
     incidents: [],
     responders: [],
     users: [],
@@ -77,6 +81,48 @@ export function useAdminData(): AdminDataState {
     }
   }, []);
 
+  // Update incident status helper function connected directly to Supabase
+  const updateIncidentStatus = useCallback(async (id: string | number, status: string) => {
+    try {
+      if (!supabase) throw new Error('Supabase client not initialized');
+      
+      const { error: updateError } = await supabase
+        .from('incidents')
+        .update({ status })
+        .eq('id', id);
+
+      if (updateError) {
+        // Fallback to try alternative table or column naming conventions if needed
+        const { error: altError } = await supabase
+          .from('incident')
+          .update({ status })
+          .eq('incident_id', id);
+        if (altError) throw altError;
+      }
+
+      // Instantly reload data to reflect changes across dashboard & logs
+      await loadData();
+    } catch (err) {
+      console.error('Failed to update incident status in Supabase:', err);
+    }
+  }, [loadData]);
+
+  const updateIncident = useCallback(async (id: string | number, updates: any) => {
+    try {
+      if (!supabase) throw new Error('Supabase client not initialized');
+      
+      const { error: updateError } = await supabase
+        .from('incidents')
+        .update(updates)
+        .eq('id', id);
+
+      if (updateError) throw updateError;
+      await loadData();
+    } catch (err) {
+      console.error('Failed to update incident details:', err);
+    }
+  }, [loadData]);
+
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
@@ -103,13 +149,9 @@ export function useAdminData(): AdminDataState {
               console.log('⚡ NEW NOTIFICATION ARRIVED:', payload);
               if (!active) return;
 
-              // 1. Re-fetch and re-map all overview data instantly
               await loadData();
-
-              // 2. Play audio chime alert exactly once
               playAdminAlertSound();
 
-              // 3. Notify header notification bell to bounce & increment unread counter
               window.dispatchEvent(
                 new CustomEvent('safe:new-incident-alert', {
                   detail: payload.new,
@@ -123,8 +165,15 @@ export function useAdminData(): AdminDataState {
             async (payload: any) => {
               console.log('⚡ RESPONDER STATUS UPDATED:', payload);
               if (!active) return;
-
-              // Refresh overview data so responder availability updates instantly across dashboard & responders tab
+              await loadData();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'incidents' },
+            async (payload: any) => {
+              console.log('⚡ INCIDENT UPDATED:', payload);
+              if (!active) return;
               await loadData();
             }
           )
@@ -154,5 +203,11 @@ export function useAdminData(): AdminDataState {
     };
   }, [loadData]);
 
-  return data;
-} 
+  return {
+    ...data,
+    updateIncidentStatus,
+    updateIncident,
+    updateStatus: updateIncidentStatus,
+    refetch: loadData,
+  };
+}

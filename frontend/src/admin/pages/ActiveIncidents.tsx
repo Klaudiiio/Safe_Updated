@@ -53,9 +53,9 @@ export function ActiveIncidents() {
   return (
     <div className="space-y-6">
       <DataNotice loading={loading} error={error} />
-      
+     
       {/* Header */}
-      <div className="flex items-center justify-between bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-amber-200/50 shadow-sm">
+      <div className="flex items-center justify-between bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-sky-100 shadow-sm">
         <div>
           <h1 className="text-2xl font-extrabold text-slate-900 mb-1">Active Incidents</h1>
           <p className="text-slate-700 text-sm font-semibold">Monitor and manage ongoing emergency situations</p>
@@ -67,7 +67,7 @@ export function ActiveIncidents() {
       </div>
 
       {/* Filters */}
-      <Card className="bg-white border-amber-200/60 shadow-md p-4 rounded-2xl">
+      <Card className="bg-white border-sky-100/60 shadow-md p-4 rounded-2xl">
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
             <Filter className="w-4 h-4 text-slate-500" />
@@ -127,7 +127,7 @@ export function ActiveIncidents() {
       </div>
 
       {!loading && !error && filteredIncidents.length === 0 && (
-        <Card className="bg-white border-amber-200/60 shadow-md p-12 text-center rounded-2xl">
+        <Card className="bg-white border-sky-100/60 shadow-md p-12 text-center rounded-2xl">
           <AlertCircle className="w-12 h-12 text-slate-400 mx-auto mb-4" />
           <h3 className="text-lg font-bold text-slate-900 mb-2">
             {activeIncidents.length === 0 ? 'No Active Incidents' : 'No Matching Incidents'}

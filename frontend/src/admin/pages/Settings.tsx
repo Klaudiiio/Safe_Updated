@@ -10,7 +10,7 @@ export function Settings() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-amber-200/50 shadow-sm">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-sky-100 shadow-sm">
         <div>
           <h1 className="text-2xl font-extrabold text-slate-900 mb-1">System Settings</h1>
           <p className="text-slate-700 text-sm font-semibold">Configure SAFE emergency monitoring system preferences</p>
@@ -21,7 +21,7 @@ export function Settings() {
         {/* Main Settings */}
         <div className="lg:col-span-2 space-y-6">
           {/* Notification Settings */}
-          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
+          <Card className="bg-white border-sky-100/60 shadow-md p-6 rounded-2xl">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
                 <Bell className="w-5 h-5 text-blue-600" />
@@ -74,7 +74,7 @@ export function Settings() {
           </Card>
 
           {/* System Settings */}
-          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
+          <Card className="bg-white border-sky-100/60 shadow-md p-6 rounded-2xl">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
                 <SettingsIcon className="w-5 h-5 text-emerald-600" />
@@ -127,7 +127,7 @@ export function Settings() {
           </Card>
 
           {/* Emergency Contacts */}
-          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
+          <Card className="bg-white border-sky-100/60 shadow-md p-6 rounded-2xl">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center">
                 <Radio className="w-5 h-5 text-red-600" />
@@ -167,7 +167,7 @@ export function Settings() {
         {/* Sidebar Info */}
         <div className="space-y-6">
           {/* System Info */}
-          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
+          <Card className="bg-white border-sky-100/60 shadow-md p-6 rounded-2xl">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
                 <Shield className="w-5 h-5 text-blue-600" />
@@ -204,7 +204,7 @@ export function Settings() {
           </Card>
 
           {/* Quick Stats */}
-          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
+          <Card className="bg-white border-sky-100/60 shadow-md p-6 rounded-2xl">
             <h2 className="text-lg font-bold text-slate-900 mb-4">Quick Stats</h2>
             <div className="space-y-4">
               <div className="flex items-center justify-between">
@@ -230,7 +230,7 @@ export function Settings() {
           </Card>
 
           {/* Actions */}
-          <Card className="bg-white border-amber-200/60 shadow-md p-6 rounded-2xl">
+          <Card className="bg-white border-sky-100/60 shadow-md p-6 rounded-2xl">
             <h2 className="text-lg font-bold text-slate-900 mb-4">Actions</h2>
             <div className="space-y-3">
               <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white justify-start font-bold rounded-xl shadow-sm">
