@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -37,6 +37,7 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 import { useAdminData } from '../useAdminData';
+import { fetchAdminProfile, updateAdminProfile, changeAdminPassword } from '../api';
 
 const menuItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
@@ -62,10 +63,11 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
   // Modal navigation view state: 'view' | 'edit-profile' | 'edit-password'
   const [modalView, setModalView] = useState<'view' | 'edit-profile' | 'edit-password'>('view');
 
-  // Profile data state
+  // Profile data state loaded from Django
   const [displayName, setDisplayName] = useState(initialDisplayName || 'admin');
-  const [contactEmail, setContactEmail] = useState('admin@ustp.edu.ph');
-  const [contactNumber, setContactNumber] = useState('+63 912 345 6789');
+  const [username, setUsername] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [contactNumber, setContactNumber] = useState('');
 
   // Password update state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -73,6 +75,24 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
   const [confirmPassword, setConfirmPassword] = useState('');
 
   const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Load real profile data when modal opens or component mounts
+  useEffect(() => {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      fetchAdminProfile(token)
+        .then((data: any) => {
+          setDisplayName(data.name || data.username || initialDisplayName);
+          setUsername(data.username || '');
+          setContactEmail(data.email || '');
+          setContactNumber(data.phone_number || '');
+        })
+        .catch((err: any) => {
+          console.warn('Could not load admin profile from backend:', err);
+        });
+    }
+  }, [isProfileModalOpen, initialDisplayName]);
 
   // Safe location fallback in case router context is momentarily absent during hot reloads
   const location = useLocation();
@@ -81,80 +101,159 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
   const initials = (displayName || 'Admin').slice(0, 2).toUpperCase();
 
   // Fetch live notifications and incidents directly from Supabase via useAdminData
-  const { notifications: rawNotifications, incidents } = useAdminData();
+  const { notifications: rawNotifications, incidents, markNotificationAsRead } = useAdminData() as any;
 
   // Local state to manage read/unread states instantly in the UI dropdown
   const [readMap, setReadMap] = useState<Record<string, boolean>>({});
 
-  const notifications = (rawNotifications && rawNotifications.length > 0 ? rawNotifications : (incidents || [])).map((n: Record<string, any>, index: number) => {
-    const id = String(n.notification_id || n.id || index + 1);
-    const isRead = readMap[id] ?? Boolean(n.is_read || n.read || false);
-    
-    const isIncident = Boolean(n.type && (n.building || n.severity || n.priority));
-    
-    const title = isIncident ? `#[${n.id}] ${n.type}` : (n.title || 'System Alert');
-    const message = isIncident 
-      ? `Location: ${n.building || 'Main Campus'} ${n.location !== '—' ? `, ${n.location}` : ''} | Priority: ${(n.severity || n.priority || 'Urgent').toUpperCase()}` 
-      : (n.message || n.content || '');
+  // Filter out notifications whose related incident status is resolved or completed
+  const notifications = useMemo(() => {
+    const rawList = rawNotifications || [];
 
-    const timeValue = n.sent_at || n.time || n.reportedAt;
-    const time = timeValue
-      ? new Date(timeValue).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      : 'Recent';
+    return rawList.filter((notification: any) => {
+      const incidentId = notification.incident_id || notification.incidentId;
+      if (incidentId && incidents) {
+        const matchingIncident = incidents.find(
+          (inc: any) => String(inc.id || inc.incident_id) === String(incidentId)
+        );
+        if (matchingIncident) {
+          const incStatus = String(matchingIncident.status || '').trim().toLowerCase();
+          if (['resolved', 'completed'].includes(incStatus)) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }).map((n: Record<string, any>, index: number) => {
+      const id = String(n.notification_id || n.id || index + 1);
+      const isRead = readMap[id] ?? (String(n.status || '').toLowerCase() === 'read' || Boolean(n.is_read || n.read));
+     
+      const title = n.title || n.notification_type || 'System Alert';
+      const message = n.message || n.content || '';
 
-    const severity = (n.severity || n.priority || 'urgent').toLowerCase();
+      const timeValue = n.sent_at || n.sentAt || n.created_at;
+      const time = timeValue
+        ? new Date(timeValue).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : 'Recent';
 
-    return {
-      id,
-      title,
-      message,
-      time,
-      path: isIncident ? '/' : '/notifications',
-      isRead,
-      severity,
-      isIncident,
-    };
-  });
+      const priority = (n.priority || n.priority_level || 'urgent').toLowerCase();
+
+      return {
+        id,
+        title,
+        message,
+        time,
+        path: '/notifications',
+        isRead,
+        severity: priority,
+      };
+    });
+  }, [rawNotifications, incidents, readMap]);
 
   const unreadCount = notifications.filter((n: { isRead: boolean }) => !n.isRead).length;
 
-  const markAsRead = (id: string) => {
+  const markAsRead = async (id: string) => {
     setReadMap((prev) => ({ ...prev, [id]: true }));
+    try {
+      if (typeof markNotificationAsRead === 'function') {
+        await markNotificationAsRead(id);
+      }
+    } catch (err) {
+      console.error('Failed to mark notification as read in Supabase:', err);
+    }
   };
 
   const markAllAsRead = () => {
     const newMap: Record<string, boolean> = {};
     notifications.forEach((n: { id: string }) => {
       newMap[n.id] = true;
+      if (typeof markNotificationAsRead === 'function') {
+        void markNotificationAsRead(n.id);
+      }
     });
     setReadMap(newMap);
   };
 
-  // Handle saving profile changes
-  const handleSaveProfile = (e: React.FormEvent) => {
+  // Handle saving profile changes through Django backend & Supabase sync
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    setFeedbackMessage('Profile details updated successfully!');
-    setTimeout(() => {
-      setFeedbackMessage('');
-      setModalView('view');
-    }, 1200);
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      setFeedbackMessage('Authentication token missing. Please log in again.');
+      return;
+    }
+
+    setIsSaving(true);
+    setFeedbackMessage('');
+
+    try {
+      const result = await updateAdminProfile(token, {
+        name: displayName,
+        username: username,
+        email: contactEmail,
+        phone_number: contactNumber,
+      });
+
+      if (result.user) {
+        setDisplayName(result.user.name || result.user.username);
+        setUsername(result.user.username);
+        setContactEmail(result.user.email);
+        setContactNumber(result.user.phone_number);
+      }
+
+      if (result.supabase_synced === false) {
+        setFeedbackMessage(`Profile updated in Django, but Supabase sync warning: ${result.sync_warning}`);
+      } else {
+        setFeedbackMessage('Profile details updated and synchronized successfully!');
+      }
+
+      setTimeout(() => {
+        setFeedbackMessage('');
+        setModalView('view');
+      }, 1500);
+    } catch (err: any) {
+      setFeedbackMessage(err.message || 'Failed to update profile.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  // Handle updating password
-  const handleSavePassword = (e: React.FormEvent) => {
+  // Handle updating password securely via backend
+  const handleSavePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword !== confirmPassword) {
       setFeedbackMessage('New passwords do not match.');
       return;
     }
-    setFeedbackMessage('Password updated successfully!');
-    setTimeout(() => {
-      setFeedbackMessage('');
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      setModalView('view');
-    }, 1200);
+
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      setFeedbackMessage('Authentication token missing. Please log in again.');
+      return;
+    }
+
+    setIsSaving(true);
+    setFeedbackMessage('');
+
+    try {
+      await changeAdminPassword(token, {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+
+      setFeedbackMessage('Password updated successfully!');
+      setTimeout(() => {
+        setFeedbackMessage('');
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        setModalView('view');
+      }, 1500);
+    } catch (err: any) {
+      setFeedbackMessage(err.message || 'Failed to update password.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Listen for real-time alert events from useAdminData to animate bell ringing
@@ -331,15 +430,13 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                               <p className="text-xs text-slate-600 line-clamp-2 pl-4">
                                 {item.message}
                               </p>
-                              {item.isIncident && (
-                                <div className="pl-4 mt-1 flex items-center gap-2">
-                                  <Badge className={`text-[10px] font-bold px-2 py-0.2 ${
-                                    isCritical ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-amber-100 text-amber-700 border-amber-200'
-                                  }`}>
-                                    {item.severity.toUpperCase()}
-                                  </Badge>
-                                </div>
-                              )}
+                              <div className="pl-4 mt-1 flex items-center gap-2">
+                                <Badge className={`text-[10px] font-bold px-2 py-0.2 capitalize ${
+                                  isCritical ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-amber-100 text-amber-700 border-amber-200'
+                                }`}>
+                                  {item.severity}
+                                </Badge>
+                              </div>
                             </Link>
                           </DropdownMenuItem>
                         );
@@ -434,7 +531,9 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
 
             {feedbackMessage && (
               <div className={`p-3 text-xs font-bold rounded-xl text-center ${
-                feedbackMessage.includes('match') ? 'bg-rose-50 border border-rose-200 text-rose-700' : 'bg-emerald-50 border border-emerald-200 text-emerald-700'
+                feedbackMessage.includes('match') || feedbackMessage.includes('Failed') || feedbackMessage.includes('incorrect')
+                  ? 'bg-rose-50 border border-rose-200 text-rose-700'
+                  : 'bg-emerald-50 border border-emerald-200 text-emerald-700'
               }`}>
                 {feedbackMessage}
               </div>
@@ -452,7 +551,7 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                   </Avatar>
                   <div className="min-w-0 flex-1 space-y-1">
                     <p className="text-base font-extrabold text-slate-900 truncate">{displayName}</p>
-                    <p className="text-xs font-semibold text-blue-600">System Administrator</p>
+                    <p className="text-xs font-semibold text-blue-600">@{username || 'admin'}</p>
                   </div>
                 </div>
 
@@ -462,11 +561,11 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                   <div className="space-y-2">
                     <div className="flex items-center gap-3 text-xs text-slate-700 font-medium">
                       <Mail className="w-4 h-4 text-slate-400 shrink-0" />
-                      <span className="truncate">{contactEmail}</span>
+                      <span className="truncate">{contactEmail || 'Not specified'}</span>
                     </div>
                     <div className="flex items-center gap-3 text-xs text-slate-700 font-medium">
                       <Phone className="w-4 h-4 text-slate-400 shrink-0" />
-                      <span>{contactNumber}</span>
+                      <span>{contactNumber || 'Not specified'}</span>
                     </div>
                   </div>
                 </div>
@@ -522,13 +621,28 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
             {modalView === 'edit-profile' && (
               <form onSubmit={handleSaveProfile} className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Display Name / Name</label>
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Full Name</label>
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
                       type="text"
                       value={displayName}
                       onChange={(e) => setDisplayName(e.target.value)}
+                      required
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Username</label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type="text"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      autoCapitalize="none"
                       required
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 transition-all"
                     />
@@ -566,16 +680,18 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                   <button
                     type="button"
                     onClick={() => setModalView('view')}
+                    disabled={isSaving}
                     className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold text-xs transition-all cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs transition-all shadow-md cursor-pointer"
+                    disabled={isSaving}
+                    className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs transition-all shadow-md cursor-pointer disabled:opacity-50"
                   >
                     <Save className="w-4 h-4" />
-                    Save Details
+                    {isSaving ? 'Saving...' : 'Save Details'}
                   </button>
                 </div>
               </form>
@@ -590,11 +706,10 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
                       type="password"
-                      placeholder="••••••••"
                       value={currentPassword}
                       onChange={(e) => setCurrentPassword(e.target.value)}
                       required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 transition-all"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 transition-all"
                     />
                   </div>
                 </div>
@@ -605,11 +720,11 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
                       type="password"
-                      placeholder="••••••••"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
                       required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 transition-all"
+                      minLength={6}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 transition-all"
                     />
                   </div>
                 </div>
@@ -620,11 +735,11 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
                       type="password"
-                      placeholder="••••••••"
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 transition-all"
+                      minLength={6}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 transition-all"
                     />
                   </div>
                 </div>
@@ -633,16 +748,18 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                   <button
                     type="button"
                     onClick={() => setModalView('view')}
+                    disabled={isSaving}
                     className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold text-xs transition-all cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs transition-all shadow-md cursor-pointer"
+                    disabled={isSaving}
+                    className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs transition-all shadow-md cursor-pointer disabled:opacity-50"
                   >
                     <Save className="w-4 h-4" />
-                    Update Password
+                    {isSaving ? 'Updating...' : 'Update Password'}
                   </button>
                 </div>
               </form>

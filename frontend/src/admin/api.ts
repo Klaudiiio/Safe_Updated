@@ -89,6 +89,98 @@ async function refreshSupabaseAccessToken(): Promise<string> {
   return refreshRequest;
 }
 
+// Helper to get the correct stored access token across legacy keys
+function getAuthToken(): string | null {
+  return (
+    localStorage.getItem('access_token') ||
+    localStorage.getItem('admin_access_token') ||
+    localStorage.getItem('access')
+  );
+}
+
+/**
+ * Fetch current admin profile details.
+ * GET /profile/
+ */
+export async function fetchAdminProfile(token?: string): Promise<any> {
+  const authToken = token || getAuthToken();
+  const response = await fetch(`${API_BASE_URL}/profile/`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+  });
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(errorMessage(body, `Failed to fetch profile (${response.status}).`));
+  }
+  return body;
+}
+
+/**
+ * Update admin profile details.
+ * PUT /profile/update/
+ * Fields: name, username, email, phone_number
+ */
+export async function updateAdminProfile(
+  token: string | undefined,
+  profileData: {
+    name?: string;
+    username?: string;
+    email?: string;
+    phone_number?: string;
+    student_id?: string;
+    course?: string;
+  }
+): Promise<any> {
+  const authToken = token || getAuthToken();
+  const response = await fetch(`${API_BASE_URL}/profile/update/`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify(profileData),
+  });
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(errorMessage(body, `Failed to update profile (${response.status}).`));
+  }
+  return body;
+}
+
+/**
+ * Change admin password.
+ * POST /profile/change-password/
+ * Fields: current_password, new_password
+ */
+export async function changeAdminPassword(
+  token: string | undefined,
+  passwordData: {
+    current_password: string;
+    new_password: string;
+  }
+): Promise<any> {
+  const authToken = token || getAuthToken();
+  const response = await fetch(`${API_BASE_URL}/profile/change-password/`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify(passwordData),
+  });
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(errorMessage(body, `Failed to update password (${response.status}).`));
+  }
+  return body;
+}
+
 async function fetchSupabaseTable(
   tableAndQuery: string,
   signal?: AbortSignal,
@@ -304,6 +396,95 @@ export async function updateIncidentStatus(incidentId: string | number, status: 
   }
 }
 
+export async function deleteNotification(notificationId: string | number): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+    throw new Error('Supabase client settings are missing.');
+  }
+  let token = localStorage.getItem('supabase_access_token');
+  if (!token) throw new Error('Supabase access token is missing.');
+
+  const requestDelete = async (accessToken: string) => {
+    return fetch(`${SUPABASE_URL}/rest/v1/notification?notification_id=eq.${notificationId}`, {
+      method: 'DELETE',
+      headers: {
+        apikey: SUPABASE_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${accessToken}`,
+        'Prefer': 'return=representation',
+      },
+    });
+  };
+
+  let response = await requestDelete(token);
+  if (response.status === 401) {
+    token = await refreshSupabaseAccessToken();
+    response = await requestDelete(token);
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(errorMessage(body, `Failed to delete notification (${response.status}).`));
+  }
+}
+
+export async function clearAllNotifications(): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+    throw new Error('Supabase client settings are missing.');
+  }
+  let token = localStorage.getItem('supabase_access_token');
+  if (!token) throw new Error('Supabase access token is missing.');
+
+  const requestClear = async (accessToken: string) => {
+    return fetch(`${SUPABASE_URL}/rest/v1/notification?notification_id=gt.0`, {
+      method: 'DELETE',
+      headers: {
+        apikey: SUPABASE_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${accessToken}`,
+        'Prefer': 'return=representation',
+      },
+    });
+  };
+
+  let response = await requestClear(token);
+  if (response.status === 401) {
+    token = await refreshSupabaseAccessToken();
+    response = await requestClear(token);
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(errorMessage(body, `Failed to clear all notifications (${response.status}).`));
+  }
+}
+
+export async function markNotificationAsRead(notificationId: string | number): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+    throw new Error('Supabase client settings are missing.');
+  }
+  let token = localStorage.getItem('supabase_access_token');
+  if (!token) throw new Error('Supabase access token is missing.');
+
+  const requestPatch = async (accessToken: string) => {
+    return fetch(`${SUPABASE_URL}/rest/v1/notification?notification_id=eq.${notificationId}`, {
+      method: 'PATCH',
+      headers: {
+        apikey: SUPABASE_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation',
+      },
+      body: JSON.stringify({ status: 'read' }),
+    });
+  };
+
+  let response = await requestPatch(token);
+  if (response.status === 401) {
+    token = await refreshSupabaseAccessToken();
+    response = await requestPatch(token);
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(errorMessage(body, `Failed to mark notification as read (${response.status}).`));
+  }
+}
+
 export async function createResponder(responderData: {
   username?: string;
   email?: string;
@@ -315,7 +496,7 @@ export async function createResponder(responderData: {
   user_type?: string;
   role?: string;
 }): Promise<void> {
-  const token = localStorage.getItem('access_token') || localStorage.getItem('clinic_staff_access_token');
+  const token = getAuthToken();
   if (!token) {
     throw new Error('Admin access token is missing. Please sign in again.');
   }
@@ -354,7 +535,7 @@ export async function createUser(userData: {
   student_id?: string;
   email?: string;
 }): Promise<void> {
-  const token = localStorage.getItem('access_token') || localStorage.getItem('clinic_staff_access_token');
+  const token = getAuthToken();
   if (!token) {
     throw new Error('Admin access token is missing. Please sign in again.');
   }

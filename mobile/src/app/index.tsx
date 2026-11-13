@@ -5,7 +5,6 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,22 +14,19 @@ import {
 } from 'react-native';
 import { useAuth } from '../auth/AuthContext';
 
-// Use EXPO_PUBLIC_API_URL environment variable to prevent network fetch failures on physical devices
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://127.0.0.1:8000/api/auth';
+const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'http://127.0.0.1:8000').replace(/\/+$/, '');
 
 export default function SignInScreen() {
   const { user, storageError, signIn, signUp } = useAuth();
   const [isRegistering, setIsRegistering] = useState(false);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
-  
-  // Forgot password sub-steps: 'request' | 'verify-otp' | 'reset-password'
+ 
   const [resetStep, setResetStep] = useState<'request' | 'verify-otp' | 'reset-password'>('request');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(storageError);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Sign in / Sign up fields
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -40,14 +36,12 @@ export default function SignInScreen() {
   const [course, setCourse] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
 
-  // Forgot password fields
-  const [recoveryMethod, setRecoveryMethod] = useState<'email' | 'phone'>('email');
-  const [recoveryTarget, setRecoveryTarget] = useState('');
+  // Email-only recovery state
+  const [recoveryEmail, setRecoveryEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
-  // Clear username and password fields when user signs out (user becomes null)
   useEffect(() => {
     if (!user) {
       setUsername('');
@@ -77,43 +71,37 @@ export default function SignInScreen() {
       }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Something went wrong. Please try again.');
-      setPassword(''); // Clear password field on failed sign-in/sign-up attempt
+      setPassword('');
     } finally {
       setLoading(false);
     }
   };
 
-  // Step 1: Request OTP code via Django backend
   const handleRequestOtp = async () => {
     setError(null);
     setSuccessMsg(null);
-    if (!recoveryTarget.trim()) {
-      setError(recoveryMethod === 'email' ? 'Please enter your Gmail address.' : 'Please enter your phone number.');
+    if (!recoveryEmail.trim() || !recoveryEmail.includes('@')) {
+      setError('Please enter a valid Gmail address.');
       return;
     }
 
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/password-reset/`, {
+      const response = await fetch(`${API_BASE_URL}/api/auth/password-reset/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          method: recoveryMethod,
-          target: recoveryTarget.trim(),
+          method: 'email',
+          target: recoveryEmail.trim(),
         }),
       });
 
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        // Exposes exact error detail from Django backend (e.g., user not found)
         throw new Error((data as any).detail || `Server error: ${response.status}`);
       }
 
-      setSuccessMsg(
-        recoveryMethod === 'email'
-          ? `Verification OTP sent to Gmail: ${recoveryTarget.trim()}`
-          : `Verification OTP sent via SMS to: ${recoveryTarget.trim()}`
-      );
+      setSuccessMsg(`Verification OTP sent to Gmail: ${recoveryEmail.trim()}`);
       setResetStep('verify-otp');
     } catch (resetError) {
       setError(resetError instanceof Error ? resetError.message : 'Failed to connect to server. Check your network configuration.');
@@ -122,7 +110,6 @@ export default function SignInScreen() {
     }
   };
 
-  // Step 2: Verify OTP code
   const handleVerifyOtp = async () => {
     setError(null);
     setSuccessMsg(null);
@@ -133,11 +120,11 @@ export default function SignInScreen() {
 
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/password-reset/`, {
+      const response = await fetch(`${API_BASE_URL}/api/auth/verify-otp/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          target: recoveryTarget.trim(),
+          target: recoveryEmail.trim(),
           otp: otpCode.trim(),
         }),
       });
@@ -156,7 +143,6 @@ export default function SignInScreen() {
     }
   };
 
-  // Step 3: Update and save new password
   const handleUpdatePassword = async () => {
     setError(null);
     setSuccessMsg(null);
@@ -171,11 +157,11 @@ export default function SignInScreen() {
 
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/confirm-password-reset/`, {
+      const response = await fetch(`${API_BASE_URL}/api/auth/confirm-password-reset/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          target: recoveryTarget.trim(),
+          target: recoveryEmail.trim(),
           otp: otpCode.trim(),
           new_password: newPassword,
         }),
@@ -191,7 +177,7 @@ export default function SignInScreen() {
         setIsForgotPassword(false);
         setResetStep('request');
         setSuccessMsg(null);
-        setRecoveryTarget('');
+        setRecoveryEmail('');
         setOtpCode('');
         setNewPassword('');
         setConfirmNewPassword('');
@@ -217,81 +203,47 @@ export default function SignInScreen() {
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.container}>
-          <View style={styles.brandRow}>
-            <View style={styles.brandIcon}><Text style={styles.brandIconText}>S</Text></View>
-            <View>
-              <Text style={styles.eyebrow}>SAFE:MEAS</Text>
-              <Text style={styles.brand}>Student Safety</Text>
-            </View>
+        <View style={styles.card}>
+          <View style={styles.shieldIconContainer}>
+            <Ionicons name="shield-outline" size={26} color="#6366f1" />
           </View>
 
-          <View style={styles.hero}>
-            <Text style={styles.eyebrow}>USER MOBILE APP</Text>
-            <Text style={styles.title}>
-              {isForgotPassword
-                ? resetStep === 'request'
-                  ? 'Reset password'
-                  : resetStep === 'verify-otp'
-                  ? 'Enter OTP Code'
-                  : 'New Password'
-                : isRegistering
-                ? 'Create your account'
-                : 'Welcome back'}
-            </Text>
-            <Text style={styles.subtitle}>
-              {isForgotPassword
-                ? resetStep === 'request'
-                  ? 'Choose whether to receive a verification code via your Gmail account or your registered phone number.'
-                  : resetStep === 'verify-otp'
-                  ? `Enter the verification code sent to ${recoveryTarget}`
-                  : 'Create and confirm your new secure password.'
-                : isRegistering
-                ? 'Register with your school account details.'
-                : 'Sign in to submit reports, share your location, record media, and contact responders.'}
-            </Text>
-          </View>
+          <Text style={styles.title}>
+            {isForgotPassword
+              ? 'Reset password'
+              : isRegistering
+              ? 'Create account'
+              : 'SAFE Student Portal'}
+          </Text>
+          <Text style={styles.subtitle}>
+            {isForgotPassword
+              ? 'Recover your account securely'
+              : isRegistering
+              ? 'Register with your school details'
+              : 'Sign in to access student safety tools'}
+          </Text>
 
-          {/* FORGOT PASSWORD WORKFLOW */}
           {isForgotPassword ? (
-            <View style={styles.form}>
+            <View style={styles.innerForm}>
               {resetStep === 'request' && (
-                <>
-                  <View style={styles.recoveryToggleRow}>
-                    <TouchableOpacity
-                      style={[styles.toggleButton, recoveryMethod === 'email' && styles.toggleButtonActive]}
-                      onPress={() => { setRecoveryMethod('email'); setRecoveryTarget(''); setError(null); setSuccessMsg(null); }}
-                    >
-                      <Ionicons name="mail-outline" size={16} color={recoveryMethod === 'email' ? '#fff' : '#91a0b7'} />
-                      <Text style={[styles.toggleButtonText, recoveryMethod === 'email' && styles.toggleButtonTextActive]}>Gmail</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.toggleButton, recoveryMethod === 'phone' && styles.toggleButtonActive]}
-                      onPress={() => { setRecoveryMethod('phone'); setRecoveryTarget(''); setError(null); setSuccessMsg(null); }}
-                    >
-                      <Ionicons name="phone-portrait-outline" size={16} color={recoveryMethod === 'phone' ? '#fff' : '#91a0b7'} />
-                      <Text style={[styles.toggleButtonText, recoveryMethod === 'phone' && styles.toggleButtonTextActive]}>Phone Number</Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  <Field
-                    label={recoveryMethod === 'email' ? 'Gmail Address' : 'Phone Number'}
-                    value={recoveryTarget}
-                    onChangeText={setRecoveryTarget}
-                    placeholder={recoveryMethod === 'email' ? 'name@gmail.com' : '+63 912 345 6789'}
-                    keyboardType={recoveryMethod === 'email' ? 'email-address' : 'phone-pad'}
-                    autoCapitalize="none"
-                  />
-                </>
+                <DarkField
+                  label="GMAIL ADDRESS"
+                  icon="mail-outline"
+                  value={recoveryEmail}
+                  onChangeText={setRecoveryEmail}
+                  placeholder="name@gmail.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
               )}
 
               {resetStep === 'verify-otp' && (
-                <Field
-                  label="Enter OTP Code"
+                <DarkField
+                  label="VERIFICATION OTP"
+                  icon="key-outline"
                   value={otpCode}
                   onChangeText={setOtpCode}
-                  placeholder="123456"
+                  placeholder="Enter 6-digit OTP"
                   keyboardType="number-pad"
                   autoCapitalize="none"
                 />
@@ -299,15 +251,17 @@ export default function SignInScreen() {
 
               {resetStep === 'reset-password' && (
                 <>
-                  <Field
-                    label="New Password"
+                  <DarkField
+                    label="NEW PASSWORD"
+                    icon="lock-closed-outline"
                     value={newPassword}
                     onChangeText={setNewPassword}
                     placeholder="At least 6 characters"
                     secureTextEntry
                   />
-                  <Field
-                    label="Confirm New Password"
+                  <DarkField
+                    label="CONFIRM NEW PASSWORD"
+                    icon="lock-closed-outline"
                     value={confirmNewPassword}
                     onChangeText={setConfirmNewPassword}
                     placeholder="Re-enter new password"
@@ -316,23 +270,17 @@ export default function SignInScreen() {
                 </>
               )}
 
-              {error && (
-                <Text accessibilityRole="alert" style={styles.error}>{error}</Text>
-              )}
+              {error && <Text style={styles.errorBanner}>{error}</Text>}
+              {successMsg && <Text style={styles.successBanner}>{successMsg}</Text>}
 
-              {successMsg && (
-                <Text accessibilityRole="status" style={styles.success}>{successMsg}</Text>
-              )}
-
-              <Pressable
-                accessibilityRole="button"
+              <TouchableOpacity
+                style={styles.primaryButton}
                 disabled={loading}
                 onPress={() => {
                   if (resetStep === 'request') void handleRequestOtp();
                   else if (resetStep === 'verify-otp') void handleVerifyOtp();
                   else if (resetStep === 'reset-password') void handleUpdatePassword();
                 }}
-                style={({ pressed }: { pressed: boolean }) => [styles.primaryButton, pressed && styles.buttonMuted]}
               >
                 {loading ? (
                   <ActivityIndicator color="#fff" />
@@ -341,31 +289,32 @@ export default function SignInScreen() {
                     {resetStep === 'request' ? 'Send OTP Code' : resetStep === 'verify-otp' ? 'Verify Code' : 'Update Password'}
                   </Text>
                 )}
-              </Pressable>
+              </TouchableOpacity>
 
-              <Pressable
-                accessibilityRole="button"
+              <TouchableOpacity
+                style={styles.secondaryButton}
                 onPress={() => {
                   setIsForgotPassword(false);
                   setResetStep('request');
                   setError(null);
                   setSuccessMsg(null);
-                  setRecoveryTarget('');
+                  setRecoveryEmail('');
                   setOtpCode('');
+                  setNewPassword('');
+                  setConfirmNewPassword('');
                 }}
-                style={styles.secondaryButton}
               >
                 <Text style={styles.secondaryButtonText}>Back to Sign In</Text>
-              </Pressable>
+              </TouchableOpacity>
             </View>
           ) : (
-            /* SIGN IN / SIGN UP VIEW */
-            <View style={styles.form}>
+            <View style={styles.innerForm}>
               {isRegistering && (
                 <>
-                  <Field label="Full name" value={name} onChangeText={setName} placeholder="Your name" />
-                  <Field
-                    label="Email"
+                  <DarkField label="FULL NAME" icon="person-outline" value={name} onChangeText={setName} placeholder="Your full name" />
+                  <DarkField
+                    label="GMAIL / EMAIL"
+                    icon="mail-outline"
                     value={email}
                     onChangeText={setEmail}
                     placeholder="name@example.com"
@@ -374,104 +323,103 @@ export default function SignInScreen() {
                   />
                 </>
               )}
-              <Field
-                label="Username"
+
+              <DarkField
+                label="USERNAME"
+                icon="person-circle-outline"
                 value={username}
                 onChangeText={setUsername}
-                placeholder="Your username"
+                placeholder="Enter your username"
                 autoCapitalize="none"
                 autoComplete="username"
               />
 
-              {/* Password Field with Eye Toggle Icon & Forgot Password Link */}
-              <View style={styles.field}>
-                <View style={styles.passwordHeaderRow}>
-                  <Text style={styles.label}>Password</Text>
-                  {!isRegistering && (
-                    <TouchableOpacity
-                      onPress={() => {
-                        setIsForgotPassword(true);
-                        setResetStep('request');
-                        setError(null);
-                        setSuccessMsg(null);
-                      }}
-                      accessibilityRole="button"
-                    >
-                      <Text style={styles.forgotPasswordText}>Forgot password?</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-                <View style={styles.passwordContainer}>
+              <View style={styles.fieldContainer}>
+                <Text style={styles.label}>PASSWORD</Text>
+                <View style={styles.inputWrapper}>
+                  <Ionicons name="lock-closed-outline" size={18} color="#64748b" style={styles.inputIcon} />
                   <TextInput
+                    style={styles.textInput}
                     value={password}
                     onChangeText={setPassword}
-                    placeholder="Your password"
-                    placeholderTextColor="#68758b"
+                    placeholder="Enter your password"
+                    placeholderTextColor="#475569"
                     secureTextEntry={!showPassword}
+                    autoCapitalize="none"
                     autoComplete={isRegistering ? 'new-password' : 'current-password'}
-                    autoCorrect={false}
-                    style={styles.passwordInput}
                   />
-                  <TouchableOpacity
-                    onPress={() => setShowPassword(!showPassword)}
-                    style={styles.eyeIconContainer}
-                    accessibilityRole="button"
-                    accessibilityLabel={showPassword ? "Hide password" : "Show password"}
-                  >
+                  <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeButton}>
                     <Ionicons
                       name={showPassword ? "eye-off-outline" : "eye-outline"}
-                      size={20}
-                      color="#91a0b7"
+                      size={18}
+                      color="#64748b"
                     />
                   </TouchableOpacity>
                 </View>
+                {!isRegistering && (
+                  <TouchableOpacity
+                    style={styles.forgotPasswordContainer}
+                    onPress={() => {
+                      setIsForgotPassword(true);
+                      setResetStep('request');
+                      setError(null);
+                      setSuccessMsg(null);
+                    }}
+                  >
+                    <Text style={styles.forgotPasswordText}>Forgot password?</Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
               {isRegistering && (
                 <>
-                  <Field label="Student / Staff ID (optional)" value={studentId} onChangeText={setStudentId} placeholder="ID number" />
-                  <Field label="Course (optional)" value={course} onChangeText={setCourse} placeholder="Course or department" />
-                  <Field label="Phone number (optional)" value={phoneNumber} onChangeText={setPhoneNumber} placeholder="Phone number" keyboardType="phone-pad" />
-                  <Text style={styles.helper}>New accounts receive the standard user role. Staff and admin access is assigned by an administrator.</Text>
+                  <DarkField label="STUDENT / STAFF ID (OPTIONAL)" icon="id-card-outline" value={studentId} onChangeText={setStudentId} placeholder="ID number" />
+                  <DarkField label="COURSE / DEPARTMENT (OPTIONAL)" icon="book-outline" value={course} onChangeText={setCourse} placeholder="Course" />
+                  <DarkField label="PHONE NUMBER (OPTIONAL)" icon="call-outline" value={phoneNumber} onChangeText={setPhoneNumber} placeholder="+63 9..." keyboardType="phone-pad" />
                 </>
               )}
 
               {(error ?? storageError) && (
-                <Text accessibilityRole="alert" style={styles.error}>
-                  {error ?? storageError}
-                </Text>
+                <View style={styles.errorBannerContainer}>
+                  <Text style={styles.errorText}>{error ?? storageError}</Text>
+                </View>
               )}
 
               {successMsg && (
-                <Text accessibilityRole="status" style={styles.success}>
-                  {successMsg}
-                </Text>
+                <View style={styles.successBannerContainer}>
+                  <Text style={styles.successText}>{successMsg}</Text>
+                </View>
               )}
 
-              <Pressable
-                accessibilityRole="button"
-                disabled={!canSubmit}
+              <TouchableOpacity
+                style={[styles.primaryButton, (!canSubmit && isRegistering) && { opacity: 0.6 }]}
+                disabled={loading}
                 onPress={() => void submit()}
-                style={({ pressed }: { pressed: boolean }) => [styles.primaryButton, (!canSubmit || pressed) && styles.buttonMuted]}
+                activeOpacity={0.85}
               >
-                {loading
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={styles.primaryButtonText}>{isRegistering ? 'Create account' : 'Sign in'}</Text>}
-              </Pressable>
+                {loading ? (
+                  <ActivityIndicator color="#ffffff" />
+                ) : (
+                  <Text style={styles.primaryButtonText}>
+                    {isRegistering ? 'Create Account' : 'Sign in to Student Portal'}
+                  </Text>
+                )}
+              </TouchableOpacity>
 
-              <Pressable
-                accessibilityRole="button"
+              <TouchableOpacity
+                style={styles.secondaryButton}
                 onPress={() => {
                   setError(null);
                   setSuccessMsg(null);
                   setIsRegistering((current) => !current);
                 }}
-                style={styles.secondaryButton}
               >
                 <Text style={styles.secondaryButtonText}>
-                  {isRegistering ? 'Already registered? Sign in' : 'New here? Create an account'}
+                  {isRegistering ? 'Already registered? Sign in' : "Don't have an account? Sign up"}
                 </Text>
-              </Pressable>
+              </TouchableOpacity>
+
+              <Text style={styles.footerNote}>Authorized student & staff access only.</Text>
             </View>
           )}
         </View>
@@ -480,63 +428,86 @@ export default function SignInScreen() {
   );
 }
 
-interface FieldProps {
+interface DarkFieldProps {
   label: string;
+  icon: keyof typeof Ionicons.glyphMap;
   value: string;
-  onChangeText: (value: string) => void;
+  onChangeText: (val: string) => void;
   placeholder: string;
-  autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
-  autoComplete?: 'username' | 'current-password' | 'new-password';
   secureTextEntry?: boolean;
   keyboardType?: 'default' | 'email-address' | 'phone-pad' | 'number-pad';
+  autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+  autoComplete?: 'username' | 'current-password' | 'new-password';
 }
 
-function Field({ label, ...inputProps }: FieldProps) {
+function DarkField({ label, icon, value, onChangeText, placeholder, secureTextEntry, keyboardType, autoCapitalize }: DarkFieldProps) {
   return (
-    <View style={styles.field}>
+    <View style={styles.fieldContainer}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput
-        {...inputProps}
-        placeholderTextColor="#68758b"
-        style={styles.input}
-        autoCorrect={false}
-      />
+      <View style={styles.inputWrapper}>
+        <Ionicons name={icon} size={18} color="#64748b" style={styles.inputIcon} />
+        <TextInput
+          style={styles.textInput}
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor="#475569"
+          secureTextEntry={secureTextEntry}
+          keyboardType={keyboardType}
+          autoCapitalize={autoCapitalize ?? 'none'}
+          autoCorrect={false}
+        />
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: '#080a0f' },
-  scroll: { flexGrow: 1, justifyContent: 'center', padding: 22 },
-  container: { width: '100%', maxWidth: 520, alignSelf: 'center', paddingVertical: 28, gap: 28 },
-  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  brandIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#331417', borderWidth: 1, borderColor: '#653033' },
-  brandIconText: { color: '#f87171', fontSize: 24, fontWeight: '800' },
-  eyebrow: { color: '#f87171', fontSize: 11, letterSpacing: 2, fontWeight: '700' },
-  brand: { color: '#f5f7fb', fontSize: 16, fontWeight: '700', marginTop: 3 },
-  hero: { gap: 8 },
-  title: { color: '#f5f7fb', fontSize: 30, lineHeight: 36, fontWeight: '800' },
-  subtitle: { color: '#a3afc2', fontSize: 15, lineHeight: 22 },
-  form: { gap: 16 },
-  field: { gap: 7 },
-  passwordHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  label: { color: '#cbd5e1', fontWeight: '600', fontSize: 13 },
-  forgotPasswordText: { color: '#f87171', fontSize: 12, fontWeight: '600' },
-  input: { minHeight: 50, color: '#fff', backgroundColor: '#111722', borderRadius: 12, borderWidth: 1, borderColor: '#273244', paddingHorizontal: 14, fontSize: 15 },
-  passwordContainer: { position: 'relative', justifyContent: 'center' },
-  passwordInput: { minHeight: 50, color: '#fff', backgroundColor: '#111722', borderRadius: 12, borderWidth: 1, borderColor: '#273244', paddingHorizontal: 14, paddingRight: 48, fontSize: 15 },
-  eyeIconContainer: { position: 'absolute', right: 14, height: '100%', justifyContent: 'center', alignItems: 'center' },
-  recoveryToggleRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
-  toggleButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 44, backgroundColor: '#111722', borderWidth: 1, borderColor: '#273244', borderRadius: 10 },
-  toggleButtonActive: { backgroundColor: '#3b171a', borderColor: '#f87171' },
-  toggleButtonText: { color: '#91a0b7', fontSize: 13, fontWeight: '600' },
-  toggleButtonTextActive: { color: '#f87171' },
-  helper: { color: '#91a0b7', fontSize: 12, lineHeight: 18 },
-  error: { color: '#fecaca', backgroundColor: '#3b171a', borderRadius: 10, padding: 12, fontSize: 13, lineHeight: 19, overflow: 'hidden' },
-  success: { color: '#a7f3d0', backgroundColor: '#064e3b', borderRadius: 10, padding: 12, fontSize: 13, lineHeight: 19, overflow: 'hidden' },
-  primaryButton: { minHeight: 52, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#dc2626', marginTop: 4 },
-  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '800' },
-  buttonMuted: { opacity: 0.55 },
-  secondaryButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-  secondaryButtonText: { color: '#cbd5e1', fontSize: 14, fontWeight: '600' },
+  flex: { flex: 1, backgroundColor: '#080b11' },
+  scroll: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  card: {
+    width: '100%', maxWidth: 440, backgroundColor: '#101420',
+    borderRadius: 24, borderWidth: 1, borderColor: '#1d263a',
+    padding: 28, alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.6, shadowRadius: 24, elevation: 12,
+  },
+  shieldIconContainer: {
+    width: 58, height: 58, borderRadius: 16, backgroundColor: '#172033',
+    borderWidth: 1, borderColor: '#293753', alignItems: 'center', justifyContent: 'center', marginBottom: 20,
+  },
+  title: { fontSize: 24, fontWeight: '900', color: '#ffffff', marginBottom: 6, textAlign: 'center', letterSpacing: 0.3 },
+  subtitle: { fontSize: 13, color: '#94a3b8', marginBottom: 24, textAlign: 'center', fontWeight: '500' },
+  innerForm: { width: '100%' },
+  fieldContainer: { width: '100%', marginBottom: 16 },
+  label: { fontSize: 11, fontWeight: '800', color: '#94a3b8', marginBottom: 8, letterSpacing: 1.2 },
+  inputWrapper: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#151b2a',
+    borderRadius: 14, borderWidth: 1, borderColor: '#222f48', height: 52, paddingHorizontal: 14,
+  },
+  inputIcon: { marginRight: 10 },
+  textInput: { flex: 1, color: '#ffffff', fontSize: 15 },
+  eyeButton: { padding: 6 },
+  forgotPasswordContainer: { alignSelf: 'flex-end', marginTop: 8 },
+  forgotPasswordText: { color: '#818cf8', fontSize: 13, fontWeight: '600' },
+  primaryButton: {
+    width: '100%', height: 52, borderRadius: 14, backgroundColor: '#6366f1',
+    alignItems: 'center', justifyContent: 'center', marginTop: 10, marginBottom: 16,
+    shadowColor: '#6366f1', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.45, shadowRadius: 10, elevation: 8,
+  },
+  primaryButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '800', letterSpacing: 0.3 },
+  secondaryButton: { alignItems: 'center', justifyContent: 'center', paddingVertical: 8, marginBottom: 10 },
+  secondaryButtonText: { color: '#818cf8', fontSize: 14, fontWeight: '600' },
+  footerNote: { color: '#64748b', fontSize: 12, textAlign: 'center', fontWeight: '500', marginTop: 4 },
+  errorBannerContainer: {
+    width: '100%', backgroundColor: '#261219', borderWidth: 1, borderColor: '#7f1d1d',
+    borderRadius: 12, padding: 14, marginBottom: 16,
+  },
+  errorBanner: { color: '#fca5a5', fontSize: 13, lineHeight: 18, textAlign: 'center', fontWeight: '500', marginBottom: 12 },
+  errorText: { color: '#fca5a5', fontSize: 13, lineHeight: 18, textAlign: 'center', fontWeight: '500' },
+  successBannerContainer: {
+    width: '100%', backgroundColor: '#064e3b', borderWidth: 1, borderColor: '#065f46',
+    borderRadius: 12, padding: 14, marginBottom: 16,
+  },
+  successBanner: { color: '#a7f3d0', fontSize: 13, lineHeight: 18, textAlign: 'center', fontWeight: '500', marginBottom: 12 },
+  successText: { color: '#a7f3d0', fontSize: 13, lineHeight: 18, textAlign: 'center', fontWeight: '500' },
 });

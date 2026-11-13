@@ -21,8 +21,7 @@ def sync_user_to_supabase(user, profile):
     if not supabase_url or not service_role_key:
         raise SupabaseNotConfigured("Supabase URL or Service Role Key is not configured in Django settings.")
 
-    # Target username for conflict resolution since `user_username_key` is the unique constraint
-    endpoint = f"{supabase_url}/rest/v1/{table_name}?on_conflict=username"
+    endpoint = f"{supabase_url.rstrip('/')}/rest/v1/{table_name}?on_conflict=user_id"
    
     headers = {
         "apikey": service_role_key,
@@ -31,10 +30,11 @@ def sync_user_to_supabase(user, profile):
         "Prefer": "resolution=merge-duplicates",  # Upsert matching records
     }
 
-    # Map Django user and profile data to your Supabase table columns
+    # Map Django user and profile data to your Supabase table columns including email
     payload = {
         "user_id": user.id,
         "username": user.username,
+        "email": user.email,
         "name": getattr(profile, 'name', ''),
         "student_id": getattr(profile, 'student_id', ''),
         "course": getattr(profile, 'course', ''),
@@ -43,14 +43,26 @@ def sync_user_to_supabase(user, profile):
     }
 
     try:
+        # 1. Attempt UPSERT via POST
         response = requests.post(endpoint, json=payload, headers=headers, timeout=10)
+       
+        # 2. If POST fails or hits a primary/unique key constraint mismatch, fallback to PATCH by username
         if response.status_code not in [200, 201, 204]:
-            # Treat 409 Conflict gracefully if it slips through
-            if response.status_code == 409:
-                logger.info("Supabase sync 409 conflict handled gracefully for username: %s", user.username)
-            else:
-                logger.error("Supabase sync failed with status %s: %s", response.status_code, response.text)
-                raise SupabaseRequestFailed(f"Supabase returned status {response.status_code}: {response.text}")
+            logger.warning("Upsert returned status %s (%s). Attempting fallback PATCH by username...", response.status_code, response.text)
+           
+            patch_endpoint = f"{supabase_url.rstrip('/')}/rest/v1/{table_name}?username=eq.{user.username}"
+            patch_headers = {
+                "apikey": service_role_key,
+                "Authorization": f"Bearer {service_role_key}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation"
+            }
+            response = requests.patch(patch_endpoint, json=payload, headers=patch_headers, timeout=10)
+
+        if response.status_code not in [200, 201, 204]:
+            logger.error("Supabase sync completely failed with status %s: %s", response.status_code, response.text)
+            raise SupabaseRequestFailed(f"Supabase returned status {response.status_code}: {response.text}")
+           
     except requests.exceptions.RequestException as e:
         logger.error("Network error while syncing user to Supabase: %s", str(e))
         raise SupabaseRequestFailed(f"Network error: {str(e)}")

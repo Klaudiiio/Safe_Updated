@@ -10,12 +10,15 @@ import {
 } from 'react';
 import {
   authenticate,
+  fetchProfile,
   submitIncidentReport as submitIncidentReportRequest,
   syncProfile as syncProfileRequest,
+  updateProfile as updateProfileRequest,
   type AuthSession,
   type AuthUser,
   type IncidentReportPayload,
   type IncidentReportResponse,
+  type ProfileUpdatePayload,
 } from '../lib/api';
 
 const SESSION_KEY = 'safe-user-session';
@@ -28,6 +31,8 @@ interface AuthContextValue {
   supabaseSynced: boolean | null;
   syncWarning: string | null;
   syncProfile: () => Promise<void>;
+  updateProfile: (payload: ProfileUpdatePayload) => Promise<any>; // Updated return type
+  refreshProfile: () => Promise<void>;
   submitIncidentReport: (payload: IncidentReportPayload) => Promise<IncidentReportResponse>;
   submitEmergencyReport: () => Promise<IncidentReportResponse>;
   signIn: (username: string, password: string) => Promise<void>;
@@ -88,6 +93,51 @@ export function AuthProvider({ children }: PropsWithChildren) {
     });
   }, [session, saveSession]);
 
+  const updateProfile = useCallback(async (payload: ProfileUpdatePayload) => {
+    if (!session) throw new Error('Sign in before updating your profile.');
+
+    const result = await updateProfileRequest(session.access, payload);
+    await saveSession({
+      ...session,
+      supabase_synced: result.supabase_synced,
+      sync_warning: result.sync_warning,
+      user: {
+        ...session.user,
+        ...result.user,
+      },
+    });
+    return result; // Explicitly return result so profile.tsx can evaluate supabase_synced
+  }, [session, saveSession]);
+
+  const refreshProfile = useCallback(async () => {
+    if (!session?.access || !session?.user) return;
+    try {
+      const updatedUser = await fetchProfile(session.access);
+     
+      // Compare fields to avoid infinite refresh loops and unnecessary re-saves
+      const currentUser = session.user;
+      const hasChanges =
+        updatedUser.name !== currentUser.name ||
+        updatedUser.username !== currentUser.username ||
+        updatedUser.student_id !== currentUser.student_id ||
+        updatedUser.course !== currentUser.course ||
+        updatedUser.phone_number !== currentUser.phone_number ||
+        updatedUser.role !== currentUser.role;
+
+      if (!hasChanges) return;
+
+      await saveSession({
+        ...session,
+        user: {
+          ...session.user,
+          ...updatedUser,
+        },
+      });
+    } catch (error) {
+      console.warn('Could not refresh profile details:', error);
+    }
+  }, [session?.access, session?.user, saveSession]);
+
   const submitIncidentReport = useCallback(async (payload: IncidentReportPayload) => {
     if (!session) throw new Error('Sign in before submitting an incident report.');
 
@@ -111,7 +161,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
     return result.report;
   }, [session, saveSession]);
 
-  // Updated signOut: Always resets session state to trigger navigation back to Login
   const signOut = useCallback(async () => {
     try {
       await SecureStore.deleteItemAsync(SESSION_KEY);
@@ -133,12 +182,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
       ? session.sync_warning ?? 'Your account is saved in Django, but its Supabase profile could not be synchronized yet.'
       : null,
     syncProfile,
+    updateProfile,
+    refreshProfile,
     submitIncidentReport,
     submitEmergencyReport,
     signIn,
     signUp,
     signOut,
-  }), [session, loading, storageError, signIn, signUp, signOut, syncProfile, submitIncidentReport, submitEmergencyReport]);
+  }), [session, loading, storageError, signIn, signUp, signOut, syncProfile, updateProfile, refreshProfile, submitIncidentReport, submitEmergencyReport]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -2,6 +2,10 @@ export interface AuthUser {
   id: number;
   username: string;
   email: string;
+  name?: string;
+  student_id?: string;
+  course?: string;
+  phone_number?: string;
   role: 'user' | 'clinic_staff' | 'admin';
 }
 
@@ -17,6 +21,22 @@ export interface AuthSession {
 export interface ProfileSyncResult {
   supabase_synced: boolean;
   sync_warning: string | null;
+}
+
+export interface ProfileUpdatePayload {
+  name: string;
+  username: string;
+  email?: string; // <-- Added optional email property
+  student_id: string;
+  course: string;
+  phone_number: string;
+}
+
+export interface ProfileUpdateResponse {
+  message: string;
+  supabase_synced: boolean;
+  sync_warning: string | null;
+  user: AuthUser;
 }
 
 export interface IncidentReportResponse {
@@ -102,7 +122,9 @@ export async function authenticate(
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/api/auth/${action}/`, {
+    // Route login requests to the dedicated mobile endpoint to restrict roles
+    const authEndpoint = action === 'login' ? 'login/mobile' : 'register';
+    response = await fetch(`${API_BASE_URL}/api/auth/${authEndpoint}/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -155,6 +177,64 @@ export async function syncProfile(accessToken: string): Promise<ProfileSyncResul
     supabase_synced: body.supabase_synced,
     sync_warning: typeof body.sync_warning === 'string' ? body.sync_warning : null,
   };
+}
+
+export async function fetchProfile(accessToken: string): Promise<AuthUser> {
+  if (!API_BASE_URL) {
+    throw new Error('API address is not set. Check EXPO_PUBLIC_API_URL and restart Expo.');
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/auth/profile/`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  } catch {
+    throw new Error('Could not reach Django to fetch your profile. Check your network connection.');
+  }
+
+  const body = await responseBody(response) as (ApiErrorBody & Partial<AuthUser>) | null;
+  if (!response.ok) {
+    throw new Error(readableError(body as ApiErrorBody | null, `Failed to fetch profile (${response.status}).`));
+  }
+
+  if (!body?.id || !body?.username) {
+    throw new Error('Django returned an incomplete profile response.');
+  }
+
+  return body as AuthUser;
+}
+
+export async function updateProfile(accessToken: string, payload: ProfileUpdatePayload): Promise<ProfileUpdateResponse> {
+  if (!API_BASE_URL) {
+    throw new Error('Django API address is not set. Check EXPO_PUBLIC_API_URL and restart Expo.');
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/auth/profile/update/`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    throw new Error('Could not reach Django to update your profile. Check your network connection.');
+  }
+
+  const body = await responseBody(response) as (ApiErrorBody & Partial<ProfileUpdateResponse>) | null;
+  if (!response.ok) {
+    throw new Error(readableError(body, `Failed to update profile credentials (${response.status}).`));
+  }
+
+  if (!body?.user) {
+    throw new Error('Django returned an incomplete profile update response.');
+  }
+
+  return body as ProfileUpdateResponse;
 }
 
 async function refreshSupabaseSession(session: AuthSession): Promise<AuthSession> {
@@ -232,7 +312,6 @@ export async function fetchUserIncidentsWithSession(
     const incidents = await fetchUserIncidents(session.access);
     return { incidents, session };
   } catch (error) {
-    // If unauthorized, attempt to refresh session token and retry once
     if (error instanceof Error && (error.message.includes('401') || error.message.includes('Unauthorized'))) {
       const refreshedSession = await refreshSupabaseSession(session);
       const incidents = await fetchUserIncidents(refreshedSession.access);

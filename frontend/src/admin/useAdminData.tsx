@@ -23,6 +23,9 @@ interface AdminDataState {
   updateIncidentStatus: (id: string | number, status: string) => Promise<void>;
   updateIncident: (id: string | number, updates: any) => Promise<void>;
   updateStatus: (id: string | number, status: string) => Promise<void>;
+  deleteNotification: (id: string | number) => Promise<boolean>;
+  clearAllNotifications: () => Promise<boolean>;
+  markNotificationAsRead: (id: string | number) => Promise<void>;
   refetch: () => Promise<void>;
 }
 
@@ -36,7 +39,7 @@ const playAdminAlertSound = () => {
 };
 
 export function useAdminData(): AdminDataState {
-  const [data, setData] = useState<Omit<AdminDataState, 'updateIncidentStatus' | 'updateIncident' | 'updateStatus' | 'refetch'>>({
+  const [data, setData] = useState<Omit<AdminDataState, 'updateIncidentStatus' | 'updateIncident' | 'updateStatus' | 'deleteNotification' | 'clearAllNotifications' | 'markNotificationAsRead' | 'refetch'>>({
     incidents: [],
     responders: [],
     users: [],
@@ -54,11 +57,11 @@ export function useAdminData(): AdminDataState {
 
       setData((current) => {
         const fetchedIds = new Set(
-          processedNotifs.map((n: any) => String(n.id || n.notification_id))
+          processedNotifs.map((n: any) => String(n.notification_id || n.id))
         );
 
         const localRealtimeNotifs = current.notifications.filter(
-          (n: any) => !fetchedIds.has(String(n.id || n.notification_id))
+          (n: any) => !fetchedIds.has(String(n.notification_id || n.id))
         );
 
         return {
@@ -85,14 +88,13 @@ export function useAdminData(): AdminDataState {
   const updateIncidentStatus = useCallback(async (id: string | number, status: string) => {
     try {
       if (!supabase) throw new Error('Supabase client not initialized');
-      
+     
       const { error: updateError } = await supabase
         .from('incidents')
         .update({ status })
         .eq('id', id);
 
       if (updateError) {
-        // Fallback to try alternative table or column naming conventions if needed
         const { error: altError } = await supabase
           .from('incident')
           .update({ status })
@@ -100,7 +102,6 @@ export function useAdminData(): AdminDataState {
         if (altError) throw altError;
       }
 
-      // Instantly reload data to reflect changes across dashboard & logs
       await loadData();
     } catch (err) {
       console.error('Failed to update incident status in Supabase:', err);
@@ -110,7 +111,7 @@ export function useAdminData(): AdminDataState {
   const updateIncident = useCallback(async (id: string | number, updates: any) => {
     try {
       if (!supabase) throw new Error('Supabase client not initialized');
-      
+     
       const { error: updateError } = await supabase
         .from('incidents')
         .update(updates)
@@ -123,10 +124,89 @@ export function useAdminData(): AdminDataState {
     }
   }, [loadData]);
 
+  // Target primary key 'notification_id' and confirm rows were deleted before updating state
+  const deleteNotification = useCallback(async (id: string | number): Promise<boolean> => {
+    try {
+      if (!supabase) throw new Error('Supabase client not initialized');
+
+      const { data: deletedRows, error } = await supabase
+        .from('notification')
+        .delete()
+        .eq('notification_id', id)
+        .select();
+
+      if (error) throw error;
+      if (!deletedRows || deletedRows.length === 0) {
+        throw new Error('Deletion blocked by Supabase RLS policies or notification not found.');
+      }
+
+      setData((current) => ({
+        ...current,
+        notifications: current.notifications.filter(
+          (n: any) => String(n.notification_id || n.id) !== String(id)
+        ),
+      }));
+      return true;
+    } catch (err) {
+      console.error('Failed to delete notification:', err);
+      return false;
+    }
+  }, []);
+
+  const clearAllNotifications = useCallback(async (): Promise<boolean> => {
+    try {
+      if (!supabase) throw new Error('Supabase client not initialized');
+
+      const { data: deletedRows, error } = await supabase
+        .from('notification')
+        .delete()
+        .gt('notification_id', 0)
+        .select();
+
+      if (error) throw error;
+      if (!deletedRows || deletedRows.length === 0) {
+        throw new Error('Clear all blocked by Supabase RLS policies.');
+      }
+
+      setData((current) => ({
+        ...current,
+        notifications: [],
+      }));
+      return true;
+    } catch (err) {
+      console.error('Failed to clear all notifications:', err);
+      return false;
+    }
+  }, []);
+
+  const markNotificationAsRead = useCallback(async (id: string | number) => {
+    try {
+      if (!supabase) throw new Error('Supabase client not initialized');
+
+      const { error } = await supabase
+        .from('notification')
+        .update({ status: 'read' })
+        .eq('notification_id', id);
+
+      if (error) throw error;
+
+      setData((current) => ({
+        ...current,
+        notifications: current.notifications.map((n: any) =>
+          String(n.notification_id || n.id) === String(id)
+            ? { ...n, unread: false, status: 'read' }
+            : n
+        ),
+      }));
+    } catch (err) {
+      console.error('Failed to mark notification as read:', err);
+    }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
-    let unsubscribeChannel: (() => void) | null = null;
+    let currentChannel: any = null;
 
     // Initial data fetch on mount
     void Promise.resolve().then(() => {
@@ -134,13 +214,13 @@ export function useAdminData(): AdminDataState {
       return undefined;
     });
 
-    // Set up Realtime listener using a static channel name to prevent connection spam
+    // Set up Realtime listener with a unique channel identifier per mount
     try {
       if (supabase) {
         const client = supabase;
-        const channelName = 'admin-global-realtime-channel';
+        const channelName = `admin-global-realtime-${Math.random().toString(36).substring(2, 9)}`;
 
-        const realTimeChannel = client
+        currentChannel = client
           .channel(channelName)
           .on(
             'postgres_changes',
@@ -161,6 +241,15 @@ export function useAdminData(): AdminDataState {
           )
           .on(
             'postgres_changes',
+            { event: 'DELETE', schema: 'public', table: 'notification' },
+            async (payload: any) => {
+              console.log('⚡ NOTIFICATION DELETED REMOTELY:', payload);
+              if (!active) return;
+              await loadData();
+            }
+          )
+          .on(
+            'postgres_changes',
             { event: '*', schema: 'public', table: 'responder' },
             async (payload: any) => {
               console.log('⚡ RESPONDER STATUS UPDATED:', payload);
@@ -176,21 +265,15 @@ export function useAdminData(): AdminDataState {
               if (!active) return;
               await loadData();
             }
-          )
-          .subscribe((status, err) => {
-            console.log(`🔌 Supabase Realtime Status [${channelName}]:`, status);
-            if (err) {
-              console.error('❌ Supabase Realtime Subscription Error:', err);
-            }
-          });
+          );
 
-        unsubscribeChannel = () => {
-          try {
-            void client.removeChannel(realTimeChannel);
-          } catch (err) {
-            // Teardown fallback
+        // Subscribe AFTER all .on() listeners are fully bound
+        currentChannel.subscribe((status: string, err: any) => {
+          console.log(`🔌 Supabase Realtime Status [${channelName}]:`, status);
+          if (err) {
+            console.error('❌ Supabase Realtime Subscription Error:', err);
           }
-        };
+        });
       }
     } catch (e) {
       console.warn('Could not set up realtime subscription', e);
@@ -199,7 +282,13 @@ export function useAdminData(): AdminDataState {
     return () => {
       active = false;
       controller.abort();
-      unsubscribeChannel?.();
+      if (currentChannel && supabase) {
+        try {
+          void supabase.removeChannel(currentChannel);
+        } catch (err) {
+          // Cleanup ignore
+        }
+      }
     };
   }, [loadData]);
 
@@ -208,6 +297,9 @@ export function useAdminData(): AdminDataState {
     updateIncidentStatus,
     updateIncident,
     updateStatus: updateIncidentStatus,
+    deleteNotification,
+    clearAllNotifications,
+    markNotificationAsRead,
     refetch: loadData,
   };
 }

@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 class MobileAuthTokenSerializer(TokenObtainPairSerializer):
     """
     Serializer used specifically for the Mobile App Login endpoint.
-    Restricts access strictly to standard Users/Students and blocks Responders/Staff/Admins.
+    Restricts access strictly to standard Users/Students and blocks Responders/Staff/Admins
+    with a generic error message to prevent role discovery/account enumeration.
     """
     def validate(self, attrs):
         data = super().validate(attrs)
@@ -27,8 +28,7 @@ class MobileAuthTokenSerializer(TokenObtainPairSerializer):
 
         if user_role not in allowed_roles:
             raise AuthenticationFailed(
-                "Access denied. Responders and clinic staff are not permitted to log into "
-                "the User Mobile Application. Please use the designated Staff Portal."
+                "No active account found with the given credentials."
             )
 
         try:
@@ -55,6 +55,9 @@ class MobileAuthTokenSerializer(TokenObtainPairSerializer):
             'username': self.user.username,
             'email': self.user.email,
             'name': profile.name,
+            'student_id': profile.student_id,
+            'course': profile.course,
+            'phone_number': profile.phone_number,
             'role': profile.role,
         }
         return data
@@ -91,6 +94,9 @@ class AuthTokenSerializer(TokenObtainPairSerializer):
             'username': self.user.username,
             'email': self.user.email,
             'name': profile.name,
+            'student_id': profile.student_id,
+            'course': profile.course,
+            'phone_number': profile.phone_number,
             'role': profile.role,
         }
         return data
@@ -120,7 +126,6 @@ class RegisterSerializer(serializers.ModelSerializer):
             password=password,
         )
 
-        # Use get_or_create to prevent UserProfile matching crashes
         profile, _ = UserProfile.objects.get_or_create(user=user)
         profile.name = name
         profile.student_id = student_id

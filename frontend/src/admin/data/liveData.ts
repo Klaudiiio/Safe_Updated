@@ -13,13 +13,17 @@ export interface LiveUser {
 
 export interface LiveNotification {
   id: string;
+  notification_id: string;
   incidentId: string;
   type: string;
+  title: string;
+  message: string;
   sentAt: string;
   status: string;
   priority_level: string;
   priority: string;
   isCritical: boolean;
+  isRead: boolean;
   incident?: any;
 }
 
@@ -117,7 +121,7 @@ export function mapIncidents(data: SupabaseOverview): Incident[] {
   const types = new Map(data.incident_types.map((row) => [key(row.incident_types_id), row]));
   const locations = new Map(data.locations.map((row) => [key(row.location_id), row]));
   const users = new Map((data.users ?? []).map((row) => [key(row.user_id), row]));
-  const notificationById = new Map(data.notifications.map((row) => [key(row.notification_id), row]));
+  const notificationById = new Map(data.notifications.map((row) => [key(row.notification_id || row.id), row]));
   const responderById = new Map(data.responders.map((row) => [key(row.responders_id), row]));
   const assignments = new Map<string, string[]>();
 
@@ -166,7 +170,7 @@ export function mapIncidents(data: SupabaseOverview): Incident[] {
 }
 
 export function mapResponders(data: SupabaseOverview): Responder[] {
-  const notifications = new Map(data.notifications.map((row) => [key(row.notification_id), row]));
+  const notifications = new Map(data.notifications.map((row) => [key(row.notification_id || row.id), row]));
   const incidentNames = new Map(data.incidents.map((row) => [key(row.incident_id), `Incident ${key(row.incident_id)}`]));
 
   const assignmentByResponder = new Map<string, string>();
@@ -228,30 +232,47 @@ export function mapNotifications(data: SupabaseOverview): LiveNotification[] {
   const seenIds = new Set<string>();
   const results: LiveNotification[] = [];
 
-  for (const row of data.notifications) {
+  for (const row of data.notifications || []) {
     const id = text(row.notification_id || row.id);
-    if (seenIds.has(id)) continue;
+    if (!id || id === '—' || seenIds.has(id)) continue;
     seenIds.add(id);
 
-    const incident = incidentMap.get(key(row.incident_id));
+    const incidentId = key(row.incident_id);
+    const incident = incidentId && incidentId !== '—' ? incidentMap.get(incidentId) : null;
+    
+    const rawType = text(row.notification_type || row.type, 'System Alert');
+    const rawMessage = text(row.message || row.content, 'System notification broadcast');
+    const sentAt = text(row.sent_at || row.created_at, new Date().toISOString());
+    const deliveryStatus = text(row.delivery_status || row.status, 'PENDING');
+
     const priorityLevel = (
       (incident?.incident_types as any)?.priority_level ||
       row.priority_level ||
       row.priority ||
-      'MINOR'
+      'URGENT'
     ).toUpperCase();
 
-    const isUrgent = priorityLevel === 'URGENT' || priorityLevel.includes('CRITICAL');
+    const isUrgent = priorityLevel === 'URGENT' || priorityLevel.includes('CRITICAL') || priorityLevel.includes('HIGH');
+    const isRead = deliveryStatus.toLowerCase() === 'read' || deliveryStatus.toLowerCase() === 'delivered';
+
+    const formattedTitle = rawType
+      .split('_')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
 
     results.push({
       id,
-      incidentId: text(row.incident_id),
-      type: text(row.notification_type || row.type),
-      sentAt: text(row.sent_at),
-      status: text(row.delivery_status || row.status),
+      notification_id: id,
+      incidentId: incidentId === '—' ? '' : incidentId,
+      type: rawType,
+      title: formattedTitle,
+      message: rawMessage,
+      sentAt,
+      status: deliveryStatus,
       priority_level: priorityLevel,
       priority: isUrgent ? 'critical' : 'minor',
       isCritical: isUrgent,
+      isRead,
       incident,
     });
   }

@@ -7,7 +7,8 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
 from django.core.mail import send_mail
-from rest_framework import generics, permissions
+from django.core.cache import cache
+from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -18,13 +19,15 @@ from .serializers import (
     MobileAuthTokenSerializer,
     RegisterSerializer,
 )
+from .models import UserProfile
 from .supabase_tokens import SupabaseTokenNotConfigured, create_supabase_access_token
 from .utils import SupabaseNotConfigured, SupabaseRequestFailed, sync_user_to_supabase
 
 logger = logging.getLogger(__name__)
 
-# Temporary storage for password reset OTPs (In production, replace with django.core.cache / Redis)
-OTP_STORAGE = {}
+# Cache-backed secure OTP constants (10 mins expiration, max 5 attempts)
+OTP_EXPIRY_SECONDS = 600
+MAX_ATTEMPTS = 5
 
 
 class LoginView(TokenObtainPairView):
@@ -49,7 +52,7 @@ class LoginView(TokenObtainPairView):
                 pass
             except (SupabaseNotConfigured, SupabaseRequestFailed) as exc:
                 err_str = getattr(exc, 'detail', str(exc))
-                if '409' in str(err_str) or 'already exists' in str(err_str):
+                if '409' in str(err_str) or 'already exists' in str(err_str) or 'duplicate key value' in str(err_str) or 'violates unique constraint' in str(err_str):
                     response.data["supabase_synced"] = True
                     response.data["sync_warning"] = None
                 else:
@@ -57,7 +60,7 @@ class LoginView(TokenObtainPairView):
                     response.data["sync_warning"] = err_str
             except Exception as exc:
                 err_str = str(exc)
-                if '409' in err_str or 'already exists' in err_str:
+                if '409' in err_str or 'already exists' in err_str or 'duplicate key value' in err_str or 'violates unique constraint' in err_str:
                     response.data["supabase_synced"] = True
                     response.data["sync_warning"] = None
                 else:
@@ -90,7 +93,7 @@ class MobileLoginView(TokenObtainPairView):
                 pass
             except (SupabaseNotConfigured, SupabaseRequestFailed) as exc:
                 err_str = getattr(exc, 'detail', str(exc))
-                if '409' in str(err_str) or 'already exists' in str(err_str):
+                if '409' in str(err_str) or 'already exists' in str(err_str) or 'duplicate key value' in str(err_str) or 'violates unique constraint' in str(err_str):
                     response.data["supabase_synced"] = True
                     response.data["sync_warning"] = None
                 else:
@@ -98,7 +101,7 @@ class MobileLoginView(TokenObtainPairView):
                     response.data["sync_warning"] = err_str
             except Exception as exc:
                 err_str = str(exc)
-                if '409' in err_str or 'already exists' in err_str:
+                if '409' in err_str or 'already exists' in err_str or 'duplicate key value' in err_str or 'violates unique constraint' in err_str:
                     response.data["supabase_synced"] = True
                     response.data["sync_warning"] = None
                 else:
@@ -117,7 +120,7 @@ class SyncProfileView(APIView):
             sync_user_to_supabase(request.user, profile)
         except (SupabaseNotConfigured, SupabaseRequestFailed) as exc:
             warning_msg = getattr(exc, 'detail', str(exc))
-            if '409' in str(warning_msg) or 'already exists' in str(warning_msg):
+            if '409' in str(warning_msg) or 'already exists' in str(warning_msg) or 'duplicate key value' in str(warning_msg) or 'violates unique constraint' in str(warning_msg):
                 return Response({
                     'supabase_synced': True,
                     'sync_warning': None,
@@ -131,6 +134,121 @@ class SyncProfileView(APIView):
             'supabase_synced': True,
             'sync_warning': None,
         })
+
+
+class ProfileDetailView(APIView):
+    """
+    Retrieves current user account details and profile information.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        return Response({
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "name": profile.name,
+            "student_id": profile.student_id,
+            "course": profile.course,
+            "phone_number": profile.phone_number,
+            "role": profile.role,
+        }, status=status.HTTP_200_OK)
+
+
+class UpdateProfileView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def put(self, request):
+        user = request.user
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+
+        data = request.data
+        new_username = data.get('username')
+        new_email = data.get('email')
+
+        # Validate unique username if changed
+        if new_username and new_username != user.username:
+            if User.objects.filter(username=new_username).exclude(pk=user.pk).exists():
+                return Response({"error": "Username already taken."}, status=status.HTTP_400_BAD_REQUEST)
+            user.username = new_username
+
+        # Validate unique email if changed
+        if new_email and new_email != user.email:
+            if User.objects.filter(email=new_email).exclude(pk=user.pk).exists():
+                return Response({"error": "Email already registered."}, status=status.HTTP_400_BAD_REQUEST)
+            user.email = new_email
+
+        user.save()
+
+        # Update profile fields
+        profile.name = data.get('name', profile.name)
+        profile.student_id = data.get('student_id', profile.student_id)
+        profile.course = data.get('course', profile.course)
+        profile.phone_number = data.get('phone_number', profile.phone_number)
+        profile.save()
+
+        supabase_synced = True
+        sync_warning = None
+
+        try:
+            sync_user_to_supabase(user, profile)
+        except (SupabaseNotConfigured, SupabaseRequestFailed) as exc:
+            err_str = getattr(exc, 'detail', str(exc))
+            if '409' in str(err_str) or 'already exists' in str(err_str) or 'duplicate key value' in str(err_str) or 'violates unique constraint' in str(err_str):
+                supabase_synced = True
+                sync_warning = None
+            else:
+                supabase_synced = False
+                sync_warning = err_str
+        except Exception as exc:
+            err_str = str(exc)
+            if '409' in err_str or 'already exists' in err_str or 'duplicate key value' in err_str or 'violates unique constraint' in err_str:
+                supabase_synced = True
+                sync_warning = None
+            else:
+                supabase_synced = False
+                sync_warning = err_str
+
+        return Response({
+            "message": "Profile updated successfully.",
+            "supabase_synced": supabase_synced,
+            "sync_warning": sync_warning,
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "name": profile.name,
+                "student_id": profile.student_id,
+                "course": profile.course,
+                "phone_number": profile.phone_number,
+                "role": profile.role,
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class ChangePasswordView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        current_password = request.data.get('current_password')
+        new_password = request.data.get('new_password')
+
+        if not current_password or not new_password:
+            return Response({"error": "Current and new passwords are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.check_password(current_password):
+            return Response({"error": "Current password is incorrect."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(new_password.strip()) < 6:
+            return Response({"error": "New password must be at least 6 characters long."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save()
+
+        return Response({"message": "Password updated successfully."}, status=status.HTTP_200_OK)
 
 
 class SupabaseTokenView(APIView):
@@ -161,7 +279,7 @@ class RegisterView(generics.CreateAPIView):
             sync_user_to_supabase(user, user.profile)
         except (SupabaseNotConfigured, SupabaseRequestFailed) as exc:
             err_str = getattr(exc, 'detail', str(exc))
-            if '409' in str(err_str) or 'already exists' in str(err_str):
+            if '409' in str(err_str) or 'already exists' in str(err_str) or 'duplicate key value' in str(err_str) or 'violates unique constraint' in str(err_str):
                 supabase_synced = True
                 sync_warning = None
             else:
@@ -169,7 +287,7 @@ class RegisterView(generics.CreateAPIView):
                 sync_warning = err_str
         except Exception as exc:
             err_str = str(exc)
-            if '409' in err_str or 'already exists' in err_str:
+            if '409' in err_str or 'already exists' in err_str or 'duplicate key value' in err_str or 'violates unique constraint' in err_str:
                 supabase_synced = True
                 sync_warning = None
             else:
@@ -193,106 +311,114 @@ class RegisterView(generics.CreateAPIView):
                 "id": user.id,
                 "username": user.username,
                 "email": user.email,
+                "name": user.profile.name,
+                "student_id": user.profile.student_id,
+                "course": user.profile.course,
+                "phone_number": user.profile.phone_number,
                 "role": user.profile.role
             }
         }, status=201)
 
 
 class PasswordResetRequestView(APIView):
-    """
-    Step 1: Generates and dispatches a 6-digit OTP code to the user's target (Email/Gmail or Phone).
-    """
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        method = request.data.get('method') # 'email' or 'phone'
-        target = request.data.get('target') # gmail address or phone number
+        email = request.data.get('target')
+        admin_flow = request.data.get('admin_flow', False)
 
-        if not target:
-            return Response({'detail': 'Target field is required.'}, status=400)
+        if not email:
+            return Response({'detail': 'Email target field is required.'}, status=400)
 
         UserModel = get_user_model()
         try:
-            if method == 'email':
-                user = UserModel.objects.filter(email=target).first()
-            else:
-                user = UserModel.objects.filter(profile__phone_number=target).first()
+            user = UserModel.objects.filter(email=email).first()
+
+            # Restrict admin portal password resets to admin accounts only
+            if admin_flow and (not user or not (user.is_staff or user.is_superuser or getattr(user.profile, 'role', '') == 'admin')):
+                return Response({'detail': 'If an associated admin account exists, verification instructions have been sent.'}, status=200)
 
             if not user:
-                # Return 404 or generic success message to prevent user enumeration
-                return Response({'detail': 'No account associated with this target found.'}, status=404)
+                return Response({'detail': 'If an associated account exists, verification instructions have been sent.'}, status=200)
 
             otp_code = str(random.randint(100000, 999999))
-            OTP_STORAGE[target] = otp_code
+           
+            # Cache-backed secure storage with attempt counter and 10-minute expiry
+            cache.set(f"otp_{email}", otp_code, timeout=OTP_EXPIRY_SECONDS)
+            cache.set(f"otp_attempts_{email}", 0, timeout=OTP_EXPIRY_SECONDS)
 
-            if method == 'email':
-                send_mail(
-                    subject='SAFE:MEAS Password Reset Verification Code',
-                    message=f'Your verification code is: {otp_code}',
-                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@safe-meas.local'),
-                    recipient_list=[target],
-                )
-            else:
-                # Log or integrate SMS gateway here
-                logger.info(f"SMS OTP for {target}: {otp_code}")
+            send_mail(
+                subject='SAFE:MEAS Password Reset Verification Code',
+                message=f'Your verification code is: {otp_code}. It expires in 10 minutes.',
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@safe-meas.local'),
+                recipient_list=[email],
+            )
 
             return Response({'detail': 'OTP code sent successfully.'}, status=200)
         except Exception as e:
-            return Response({'detail': str(e)}, status=500)
+            logger.error(f"Password reset request error: {str(e)}")
+            return Response({'detail': 'An error occurred processing your request.'}, status=500)
 
 
 class VerifyOtpView(APIView):
-    """
-    Step 2: Validates the 6-digit OTP code entered by the user.
-    """
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        target = request.data.get('target')
+        email = request.data.get('target')
         otp = request.data.get('otp')
 
-        if not target or not otp:
-            return Response({'detail': 'Target and OTP are required.'}, status=400)
+        if not email or not otp:
+            return Response({'detail': 'Target email and OTP are required.'}, status=400)
 
-        stored_otp = OTP_STORAGE.get(target)
+        cache_key_otp = f"otp_{email}"
+        cache_key_attempts = f"otp_attempts_{email}"
+
+        stored_otp = cache.get(cache_key_otp)
+        attempts = cache.get(cache_key_attempts, 0)
+
+        if attempts >= MAX_ATTEMPTS:
+            cache.delete(cache_key_otp)
+            return Response({'detail': 'Maximum verification attempts exceeded. Please request a new code.'}, status=400)
+
         if not stored_otp or stored_otp != otp:
+            cache.set(cache_key_attempts, attempts + 1, timeout=OTP_EXPIRY_SECONDS)
             return Response({'detail': 'Invalid or expired OTP code.'}, status=400)
 
         return Response({'detail': 'OTP verified successfully.'}, status=200)
 
 
 class ConfirmPasswordResetView(APIView):
-    """
-    Step 3: Confirms OTP and updates the user's password securely.
-    """
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        target = request.data.get('target')
+        email = request.data.get('target')
         otp = request.data.get('otp')
         new_password = request.data.get('new_password')
 
-        if not target or not otp or not new_password:
+        if not email or not otp or not new_password:
             return Response({'detail': 'All fields are required.'}, status=400)
 
         if len(new_password.strip()) < 6:
             return Response({'detail': 'Password must be at least 6 characters long.'}, status=400)
 
-        stored_otp = OTP_STORAGE.get(target)
+        cache_key_otp = f"otp_{email}"
+        stored_otp = cache.get(cache_key_otp)
+
         if not stored_otp or stored_otp != otp:
             return Response({'detail': 'Invalid or expired OTP session.'}, status=400)
 
         UserModel = get_user_model()
         try:
-            user = UserModel.objects.filter(email=target).first() or UserModel.objects.filter(profile__phone_number=target).first()
+            user = UserModel.objects.filter(email=email).first()
             if not user:
                 return Response({'detail': 'User not found.'}, status=404)
 
             user.set_password(new_password)
             user.save()
 
-            # Clear stored OTP session
-            OTP_STORAGE.pop(target, None)
+            # Enforce one-time use by removing OTP from cache immediately
+            cache.delete(cache_key_otp)
+            cache.delete(f"otp_attempts_{email}")
 
             return Response({'detail': 'Password updated successfully.'}, status=200)
         except Exception as e:
@@ -342,44 +468,15 @@ class CreateUserView(APIView):
 
             if supabase_url and service_key:
                 try:
-                    headers = {
-                        "apikey": service_key,
-                        "Authorization": f"Bearer {service_key}",
-                        "Content-Type": "application/json",
-                        "Prefer": "return=representation"
-                    }
-                    random_suffix = random.randint(1000, 9999)
-                    payload = {
-                        "user_id": int(time.time()),
-                        "name": name,
-                        "username": username,
-                        "course": course or "General",
-                        "phone_number": phone_number or "",
-                        "user_type": user_type.lower(),
-                        "student_id": student_id or f"ID-{random_suffix}"
-                    }
-
-                    res = requests.post(
-                        f"{supabase_url.rstrip('/')}/rest/v1/user",
-                        json=payload,
-                        headers=headers,
-                        timeout=10
-                    )
-
-                    if res.status_code >= 400:
-                        res = requests.post(
-                            f"{supabase_url.rstrip('/')}/rest/v1/users",
-                            json=payload,
-                            headers=headers,
-                            timeout=10
-                        )
-
-                    if res.status_code >= 400:
-                        supabase_synced = False
-                        sync_warning = f"Supabase User Table Error [{res.status_code}]: {res.text}"
+                    sync_user_to_supabase(user, user.profile)
                 except Exception as sub_exc:
-                    supabase_synced = False
-                    sync_warning = str(sub_exc)
+                    err_str = str(sub_exc)
+                    if '409' in err_str or 'already exists' in err_str or 'duplicate key value' in err_str or 'violates unique constraint' in err_str:
+                        supabase_synced = True
+                        sync_warning = None
+                    else:
+                        supabase_synced = False
+                        sync_warning = err_str
 
             return Response({
                 "message": f"User '{username}' created successfully.",
@@ -440,42 +537,14 @@ class CreateClinicStaffView(APIView):
             if supabase_url and service_key:
                 try:
                     sync_user_to_supabase(user, user.profile)
-
-                    headers = {
-                        "apikey": service_key,
-                        "Authorization": f"Bearer {service_key}",
-                        "Content-Type": "application/json",
-                        "Prefer": "return=representation"
-                    }
-                    payload = {
-                        "name": name,
-                        "department": department,
-                        "contact_number": contact_number,
-                        "availability_status": availability_status.lower(),
-                        "user_type": role.lower().replace(' ', '_')
-                    }
-                   
-                    res = requests.post(
-                        f"{supabase_url.rstrip('/')}/rest/v1/responder",
-                        json=payload,
-                        headers=headers,
-                        timeout=10
-                    )
-                   
-                    if res.status_code >= 400:
-                        res = requests.post(
-                            f"{supabase_url.rstrip('/')}/rest/v1/responders",
-                            json=payload,
-                            headers=headers,
-                            timeout=10
-                        )
-
-                    if res.status_code >= 400:
-                        supabase_synced = False
-                        sync_warning = f"Responder Table Error [{res.status_code}]: {res.text}"
                 except Exception as sub_exc:
-                    supabase_synced = False
-                    sync_warning = str(sub_exc)
+                    err_str = str(sub_exc)
+                    if '409' in err_str or 'already exists' in err_str or 'duplicate key value' in err_str or 'violates unique constraint' in err_str:
+                        supabase_synced = True
+                        sync_warning = None
+                    else:
+                        supabase_synced = False
+                        sync_warning = err_str
 
             return Response({
                 "message": f"Staff member '{username}' created successfully.",

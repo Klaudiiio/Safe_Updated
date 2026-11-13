@@ -4,6 +4,7 @@ from unittest.mock import patch
 import jwt
 from django.contrib.auth.models import User
 from django.core.management import call_command, CommandError
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 from .models import UserProfile
@@ -33,7 +34,7 @@ class LoginResponseTests(TestCase):
 
     @patch(
         'accounts.serializers.sync_user_to_supabase',
-        side_effect=SupabaseRequestFailed(),
+        side_effect=SupabaseRequestFailed("Supabase failure"),
     )
     def test_login_succeeds_and_reports_when_supabase_sync_fails(self, _sync_user):
         User.objects.create_user(username='local-only', password='test-password')
@@ -46,7 +47,63 @@ class LoginResponseTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data['supabase_synced'])
-        self.assertEqual(response.data['sync_warning'], SupabaseRequestFailed.default_detail)
+        self.assertEqual(response.data['sync_warning'], "Supabase failure")
+
+
+class MobileLoginRestrictionTests(TestCase):
+    @patch('accounts.serializers.sync_user_to_supabase')
+    def test_mobile_login_restriction(self, _sync_user):
+        # 1. Test student success
+        student_user = User.objects.create_user(username='student1', password='test-password')
+        student_user.profile.role = 'student'
+        student_user.profile.save()
+
+        response = APIClient().post(
+            '/api/auth/mobile/login/',
+            {'username': 'student1', 'password': 'test-password'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['user']['role'], 'student')
+
+        # 2. Test standard user success
+        standard_user = User.objects.create_user(username='user1', password='test-password')
+        standard_user.profile.role = 'user'
+        standard_user.profile.save()
+
+        response = APIClient().post(
+            '/api/auth/mobile/login/',
+            {'username': 'user1', 'password': 'test-password'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['user']['role'], 'user')
+
+        # 3. Test admin block returns generic error message
+        admin_user = User.objects.create_user(username='admin1', password='test-password')
+        admin_user.profile.role = 'admin'
+        admin_user.profile.save()
+
+        response = APIClient().post(
+            '/api/auth/mobile/login/',
+            {'username': 'admin1', 'password': 'test-password'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertIn('No active account found', str(response.data))
+
+        # 4. Test clinic staff / responder block returns generic error message
+        staff_user = User.objects.create_user(username='staff1', password='test-password')
+        staff_user.profile.role = 'clinic_staff'
+        staff_user.profile.save()
+
+        response = APIClient().post(
+            '/api/auth/mobile/login/',
+            {'username': 'staff1', 'password': 'test-password'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertIn('No active account found', str(response.data))
 
 
 class RegistrationTests(TestCase):
@@ -78,7 +135,7 @@ class RegistrationTests(TestCase):
 
     @patch(
         'accounts.serializers.sync_user_to_supabase',
-        side_effect=SupabaseRequestFailed(),
+        side_effect=SupabaseRequestFailed("Supabase failure"),
     )
     def test_registration_reports_unavailable_supabase_sync(self, _sync_user):
         response = APIClient().post(
@@ -112,7 +169,7 @@ class ProfileSyncEndpointTests(TestCase):
 
     @patch(
         'accounts.views.sync_user_to_supabase',
-        side_effect=SupabaseRequestFailed(),
+        side_effect=SupabaseRequestFailed("Supabase failure"),
     )
     def test_sync_endpoint_reports_supabase_failure(self, _sync_user):
         user = User.objects.create_user(username='sync-failure', password='test-password')
@@ -123,10 +180,157 @@ class ProfileSyncEndpointTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data['supabase_synced'])
-        self.assertEqual(response.data['sync_warning'], SupabaseRequestFailed.default_detail)
+        self.assertEqual(response.data['sync_warning'], "Supabase failure")
 
     def test_sync_endpoint_requires_authentication(self):
         response = APIClient().post('/api/auth/profile/sync/')
+
+        self.assertEqual(response.status_code, 401)
+
+
+class ProfileUpdateTests(TestCase):
+    @patch('accounts.views.sync_user_to_supabase')
+    def test_authenticated_user_can_update_profile_and_sync_to_supabase(self, sync_user):
+        user = User.objects.create_user(username='update-user', password='test-password')
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.put(
+            '/api/auth/profile/update/',
+            {
+                'name': 'Updated Name',
+                'username': 'new-username-val',
+                'email': 'updated@campus.edu',
+                'student_id': 'STU-999',
+                'course': 'Information Technology',
+                'phone_number': '555-9999',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['user']['name'], 'Updated Name')
+        self.assertEqual(response.data['user']['username'], 'new-username-val')
+        self.assertEqual(response.data['user']['email'], 'updated@campus.edu')
+        self.assertEqual(response.data['user']['student_id'], 'STU-999')
+        self.assertTrue(response.data['supabase_synced'])
+        sync_user.assert_called_once()
+
+    @patch('accounts.views.sync_user_to_supabase', side_effect=SupabaseRequestFailed("Supabase timeout"))
+    def test_profile_update_handles_username_change_and_sync_failure(self, sync_user):
+        user = User.objects.create_user(username='old-username', password='test-password')
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.put(
+            '/api/auth/profile/update/',
+            {
+                'name': 'Clyde Olana',
+                'username': 'new-username',
+                'email': 'olanaclyde0@gmail.com',
+                'student_id': '2028303202',
+                'course': 'Information Technology',
+                'phone_number': '81645161',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['supabase_synced'])
+        self.assertEqual(response.data['sync_warning'], "Supabase timeout")
+       
+        user.refresh_from_db()
+        self.assertEqual(user.username, 'new-username')
+        self.assertEqual(user.email, 'olanaclyde0@gmail.com')
+        self.assertEqual(user.profile.name, 'Clyde Olana')
+        self.assertEqual(user.profile.student_id, '2028303202')
+
+
+class UserEmailSyncTests(TestCase):
+    @patch('accounts.utils.supabase_request')
+    def test_user_email_included_in_supabase_sync_payload(self, mock_supabase_request):
+        mock_supabase_request.return_value.status_code = 200
+        user = User.objects.create_user(
+            username='email-sync-user',
+            email='syncme@campus.edu',
+            password='test-password'
+        )
+        user.profile.name = 'Email Sync'
+        user.profile.save()
+
+        sync_user_to_supabase(user, user.profile)
+
+        self.assertTrue(mock_supabase_request.called)
+        user_call = mock_supabase_request.call_args_list[0]
+        self.assertEqual(user_call.args[0], 'POST')
+        self.assertEqual(user_call.args[1], 'user')
+        payload = user_call.kwargs.get('payload', {})
+        self.assertEqual(payload.get('email'), 'syncme@campus.edu')
+
+
+class PasswordChangeTests(TestCase):
+    def test_authenticated_user_can_change_password(self):
+        user = User.objects.create_user(username='pwd-user', password='old-password')
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.post(
+            '/api/auth/profile/change-password/',
+            {
+                'current_password': 'old-password',
+                'new_password': 'new-secure-password',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['message'], 'Password updated successfully.')
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('new-secure-password'))
+
+    def test_password_change_requires_correct_current_password(self):
+        user = User.objects.create_user(username='pwd-user2', password='old-password')
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.post(
+            '/api/auth/profile/change-password/',
+            {
+                'current_password': 'wrong-password',
+                'new_password': 'new-secure-password',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Current password is incorrect', response.data['error'])
+
+    def test_password_change_enforces_minimum_length(self):
+        user = User.objects.create_user(username='pwd-user3', password='old-password')
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.post(
+            '/api/auth/profile/change-password/',
+            {
+                'current_password': 'old-password',
+                'new_password': 'short',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('at least 6 characters', response.data['error'])
+
+    def test_password_change_requires_authentication(self):
+        response = client = APIClient().post(
+            '/api/auth/profile/change-password/',
+            {
+                'current_password': 'old-password',
+                'new_password': 'new-secure-password',
+            },
+            format='json',
+        )
 
         self.assertEqual(response.status_code, 401)
 
@@ -274,3 +478,110 @@ class SupabaseBackfillCommandTests(TestCase):
     def test_command_requires_supabase_credentials(self):
         with self.assertRaisesMessage(CommandError, 'Set SUPABASE_URL'):
             call_command('sync_users_to_supabase', stdout=StringIO(), stderr=StringIO())
+
+
+class PasswordResetOtpTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.admin_user = User.objects.create_user(
+            username='admin-reset',
+            email='admin@campus.edu',
+            password='old-secure-password'
+        )
+        self.admin_user.profile.role = 'admin'
+        self.admin_user.profile.save()
+
+    def test_password_reset_request_generates_and_sends_otp(self):
+        response = APIClient().post(
+            '/api/auth/password-reset/',
+            {'target': 'admin@campus.edu', 'admin_flow': True},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('OTP code sent successfully', response.data['detail'])
+        self.assertIsNotNone(cache.get('otp_admin@campus.edu'))
+
+    def test_password_reset_request_restricts_non_admin_in_admin_flow(self):
+        User.objects.create_user(
+            username='student-reset',
+            email='student@campus.edu',
+            password='old-password'
+        )
+        response = APIClient().post(
+            '/api/auth/password-reset/',
+            {'target': 'student@campus.edu', 'admin_flow': True},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('If an associated admin account exists', response.data['detail'])
+        self.assertIsNone(cache.get('otp_student@campus.edu'))
+
+    def test_verify_otp_success_and_failure(self):
+        cache.set('otp_admin@campus.edu', '654321', timeout=600)
+        cache.set('otp_attempts_admin@campus.edu', 0, timeout=600)
+
+        client = APIClient()
+
+        res_fail = client.post(
+            '/api/auth/verify-otp/',
+            {'target': 'admin@campus.edu', 'otp': '000000'},
+            format='json',
+        )
+        self.assertEqual(res_fail.status_code, 400)
+        self.assertIn('Invalid or expired OTP code', res_fail.data['detail'])
+
+        res_success = client.post(
+            '/api/auth/verify-otp/',
+            {'target': 'admin@campus.edu', 'otp': '654321'},
+            format='json',
+        )
+        self.assertEqual(res_success.status_code, 200)
+        self.assertIn('OTP verified successfully', res_success.data['detail'])
+
+    def test_verify_otp_locks_out_after_max_attempts(self):
+        cache.set('otp_admin@campus.edu', '654321', timeout=600)
+        cache.set('otp_attempts_admin@campus.edu', 5, timeout=600)
+
+        response = APIClient().post(
+            '/api/auth/verify-otp/',
+            {'target': 'admin@campus.edu', 'otp': '654321'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Maximum verification attempts exceeded', response.data['detail'])
+
+    def test_confirm_password_reset_updates_password_and_clears_cache(self):
+        cache.set('otp_admin@campus.edu', '654321', timeout=600)
+
+        response = APIClient().post(
+            '/api/auth/confirm-password-reset/',
+            {
+                'target': 'admin@campus.edu',
+                'otp': '654321',
+                'new_password': 'brand-new-secure-password',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Password updated successfully', response.data['detail'])
+
+        self.admin_user.refresh_from_db()
+        self.assertTrue(self.admin_user.check_password('brand-new-secure-password'))
+        self.assertIsNone(cache.get('otp_admin@campus.edu'))
+
+    def test_confirm_password_reset_rejects_short_passwords(self):
+        cache.set('otp_admin@campus.edu', '654321', timeout=600)
+
+        response = APIClient().post(
+            '/api/auth/confirm-password-reset/',
+            {
+                'target': 'admin@campus.edu',
+                'otp': '654321',
+                'new_password': 'short',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Password must be at least 6 characters', response.data['detail'])

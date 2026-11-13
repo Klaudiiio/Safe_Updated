@@ -2,31 +2,32 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Tabs } from 'expo-router';
 import { Home, History, User, ShieldCheck } from 'lucide-react-native';
-import { useTheme } from '../../context/ThemeContext';
+import { LinearGradient } from 'expo-linear-gradient';
 
 export default function TabLayout() {
-  const { isDark } = useTheme();
-
   return (
     <Tabs
       screenOptions={{
         headerShown: true,
-        headerStyle: {
-          backgroundColor: isDark ? '#060913' : '#ffffff',
-          elevation: 0,
-          shadowOpacity: 0,
-          borderBottomWidth: 1,
-          borderBottomColor: isDark ? '#1e293b' : '#e2e8f0',
-        },
+        // Header Background Gradient & Border Accent
+        headerBackground: () => (
+          <LinearGradient
+            colors={['#151130', '#1a153b', '#231e4d']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={[StyleSheet.absoluteFill, styles.headerBorder]}
+          />
+        ),
+        headerTintColor: '#ffffff',
         // SAFE Logo and Title on the Header Left
         headerLeft: () => (
           <View style={styles.headerLeftContainer}>
-            <View style={[styles.logoCircle, { backgroundColor: isDark ? '#0f172a' : '#f1f5f9', borderColor: isDark ? '#1e293b' : '#e2e8f0' }]}>
-              <ShieldCheck size={20} color="#3b82f6" />
+            <View style={styles.logoCircle}>
+              <ShieldCheck size={20} color="#818cf8" />
             </View>
             <View>
               <View style={styles.brandRow}>
-                <Text style={[styles.brandTitle, { color: isDark ? '#ffffff' : '#0f172a' }]}>SAFE</Text>
+                <Text style={styles.brandTitle}>SAFE</Text>
                 <View style={styles.onlinePill}>
                   <View style={styles.onlineDot} />
                   <Text style={styles.onlineText}>Online</Text>
@@ -36,16 +37,27 @@ export default function TabLayout() {
             </View>
           </View>
         ),
-        headerTitle: '', // Cleared standard title to prioritize the brand header
+        headerTitle: '',
+        // Footer Tab Bar Styling with Gradient and Border
+        tabBarBackground: () => (
+          <LinearGradient
+            colors={['#151130', '#1a153b', '#231e4d']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={[StyleSheet.absoluteFill, styles.tabBarBorder]}
+          />
+        ),
         tabBarStyle: {
-          backgroundColor: isDark ? '#060913' : '#ffffff',
-          borderTopColor: isDark ? '#1e293b' : '#e2e8f0',
-          height: 60,
+          position: 'absolute',
+          borderTopWidth: 1,
+          borderTopColor: 'rgba(10, 5, 29, 0.6)', // border-indigo-950/60
+          height: 62,
           paddingBottom: 8,
           paddingTop: 8,
+          elevation: 0,
         },
-        tabBarActiveTintColor: '#3b82f6',
-        tabBarInactiveTintColor: isDark ? '#64748b' : '#94a3b8',
+        tabBarActiveTintColor: '#818cf8',
+        tabBarInactiveTintColor: '#64748b',
       }}
     >
       <Tabs.Screen
@@ -59,7 +71,7 @@ export default function TabLayout() {
         name="history"
         options={{
           title: 'History',
-          headerShown: false, // Hidden header for History tab
+          headerShown: false,
           tabBarIcon: ({ color, size }) => <History size={size} color={color} />,
         }}
       />
@@ -67,7 +79,7 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: 'Profile',
-          headerShown: false, // Hidden header for Profile tab
+          headerShown: false,
           tabBarIcon: ({ color, size }) => <User size={size} color={color} />,
         }}
       />
@@ -76,6 +88,14 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
+  headerBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(10, 5, 29, 0.6)', // border-indigo-950/60
+  },
+  tabBarBorder: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(10, 5, 29, 0.6)', // border-indigo-950/60
+  },
   headerLeftContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -87,6 +107,8 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 12,
     borderWidth: 1,
+    borderColor: 'rgba(10, 5, 29, 0.6)',
+    backgroundColor: '#1a153b',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -99,6 +121,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '900',
     letterSpacing: 0.5,
+    color: '#ffffff',
   },
   onlinePill: {
     flexDirection: 'row',
@@ -123,7 +146,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   brandSubtitle: {
-    color: '#64748b',
+    color: '#94a3b8',
     fontSize: 10,
     fontWeight: '500',
   },

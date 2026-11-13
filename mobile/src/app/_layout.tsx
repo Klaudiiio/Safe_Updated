@@ -4,14 +4,12 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useEffect } from 'react';
 import { AuthProvider, useAuth } from '../auth/AuthContext';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
+import { LinearGradient } from 'expo-linear-gradient';
 
 function AppNavigator() {
   const { user, loading } = useAuth();
-  const { isDark } = useTheme();
   const segments = useSegments();
   const router = useRouter();
-
-  const backgroundColor = isDark ? '#060913' : '#f8fafc';
 
   useEffect(() => {
     if (loading) return;
@@ -27,16 +25,29 @@ function AppNavigator() {
 
   if (loading) {
     return (
-      <View style={[styles.loading, { backgroundColor }]}>
-        <ActivityIndicator color="#ef4444" size="large" />
-      </View>
+      <LinearGradient
+        colors={['#151130', '#1a153b', '#231e4d']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.loading}
+      >
+        <ActivityIndicator color="#818cf8" size="large" />
+      </LinearGradient>
     );
   }
 
   return (
     <>
-      <StatusBar style={isDark ? 'light' : 'dark'} />
-      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor } }}>
+      <StatusBar style="light" />
+      <Stack
+        screenOptions={{
+          headerStyle: { backgroundColor: '#151130' },
+          headerTintColor: '#ffffff',
+          headerTitleStyle: { fontWeight: 'bold' },
+          contentStyle: { backgroundColor: '#151130' },
+          headerShown: false,
+        }}
+      >
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="tabs" options={{ headerShown: false }} />
       </Stack>
@@ -58,6 +69,6 @@ const styles = StyleSheet.create({
   loading: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'center', // Fixed from justify-content to justifyContent
+    justifyContent: 'center',
   },
 });

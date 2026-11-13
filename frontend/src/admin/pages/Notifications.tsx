@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { AlertCircle, AlertTriangle, Bell, CheckCircle, Clock, Radio, Trash2, CheckCheck } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Bell, CheckCircle, Radio, Trash2, CheckCheck, UserCheck } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -14,105 +14,52 @@ function notificationTime(value?: string): string {
 }
 
 export function Notifications() {
-  const { notifications, incidents, loading, error, deleteNotification, clearAllNotifications } = useAdminData() as any;
+  const { notifications, loading, error, deleteNotification, clearAllNotifications } = useAdminData() as any;
 
   // Local state to manage optimistically deleted notification IDs
   const [deletedIds, setDeletedIds] = useState<(string | number)[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  // Filter out notifications whose related incident status is resolved or completed, and any deleted ones
+  // Display all notifications from Supabase except locally deleted ones
   const safeNotifications = useMemo(() => {
     const rawList = notifications || [];
 
     return rawList.filter((notification: any) => {
       const id = notification.notification_id || notification.id;
       if (deletedIds.includes(id)) return false;
-
-      const incidentId = notification.incident_id || notification.incidentId;
-      if (incidentId) {
-        // Find matching incident to check its status
-        const matchingIncident = incidents?.find(
-          (inc: any) => String(inc.id || inc.incident_id) === String(incidentId)
-        );
-
-        if (matchingIncident) {
-          const incStatus = String(matchingIncident.status || '').trim().toLowerCase();
-          // Hide notification if the related incident is resolved or completed
-          if (['resolved', 'completed'].includes(incStatus)) {
-            return false;
-          }
-        }
-      }
-
       return true;
     });
-  }, [notifications, incidents, deletedIds]);
+  }, [notifications, deletedIds]);
 
-  // Handle single notification permanent deletion in Supabase & Website
+  // Handle single notification permanent deletion with rollback on failure
   const handleDelete = async (id: string | number) => {
+    setActionError(null);
     // Optimistic UI update
     setDeletedIds(prev => [...prev, id]);
 
-    try {
-      if (typeof deleteNotification === 'function') {
-        await deleteNotification(id);
-      } else {
-        // Fallback direct Supabase REST deletion if deleteNotification is not in useAdminData hook yet
-        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.replace(/\/+$/, '');
-        const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-        const token = localStorage.getItem('clinic_staff_supabase_token') || SUPABASE_KEY;
-
-        if (SUPABASE_URL && SUPABASE_KEY) {
-          await fetch(`${SUPABASE_URL}/rest/v1/notifications?or=(id.eq.${id},notification_id.eq.${id})`, {
-            method: 'DELETE',
-            headers: {
-              apikey: SUPABASE_KEY,
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-          });
-        }
-      }
-    } catch (err) {
-      console.error('Failed to permanently delete notification from Supabase:', err);
+    const success = await deleteNotification(id);
+    if (!success) {
+      // Rollback optimistic hide if Supabase rejected it (e.g. RLS policy violation)
+      setDeletedIds(prev => prev.filter(item => item !== id));
+      setActionError('Failed to delete notification. Check Supabase RLS delete permissions.');
     }
   };
 
-  // Handle clear all notifications permanently in Supabase & Website
+  // Handle clear all notifications permanently with rollback on failure
   const handleClearAll = async () => {
+    setActionError(null);
     const allIds = (safeNotifications || []).map((n: any) => n.notification_id || n.id);
     setDeletedIds(prev => [...prev, ...allIds]);
     setIsDeleting(true);
 
-    try {
-      if (typeof clearAllNotifications === 'function') {
-        await clearAllNotifications();
-      } else {
-        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.replace(/\/+$/, '');
-        const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-        const token = localStorage.getItem('clinic_staff_supabase_token') || SUPABASE_KEY;
-
-        if (SUPABASE_URL && SUPABASE_KEY) {
-          // Delete all visible notifications matching IDs explicitly typed
-          await Promise.all(
-            allIds.map(async (id: string | number) => {
-              await fetch(`${SUPABASE_URL}/rest/v1/notifications?or=(id.eq.${id},notification_id.eq.${id})`, {
-                method: 'DELETE',
-                headers: {
-                  apikey: SUPABASE_KEY,
-                  Authorization: `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                },
-              });
-            })
-          );
-        }
-      }
-    } catch (err) {
-      console.error('Failed to clear all notifications from Supabase:', err);
-    } finally {
-      setIsDeleting(false);
+    const success = await clearAllNotifications();
+    if (!success) {
+      // Rollback all
+      setDeletedIds(prev => prev.filter(id => !allIds.includes(id)));
+      setActionError('Failed to clear notifications. Check Supabase RLS delete permissions.');
     }
+    setIsDeleting(false);
   };
 
   const criticalCount = safeNotifications.filter((notification: any) => {
@@ -124,17 +71,17 @@ export function Notifications() {
   const minorCount = safeNotifications.filter((notification: any) => {
     const priority = (notification.priority || notification.priority_level || '').toLowerCase();
     const typeStr = (notification.type || notification.title || '').toLowerCase();
-    return priority === 'minor' || typeStr.includes('minor') || typeStr.includes('warning');
+    return priority === 'minor' || typeStr.includes('minor') || typeStr.includes('warning') || typeStr.includes('registration');
   }).length;
 
   const deliveredCount = safeNotifications.filter((notification: any) => {
     const status = (notification.status || notification.delivery_status || 'sent').toLowerCase();
-    return status === 'sent' || status === 'delivered' || status === 'active';
+    return status === 'sent' || status === 'delivered' || status === 'active' || status === 'pending';
   }).length;
 
   return (
     <div className="space-y-6">
-      <DataNotice loading={loading} error={error} />
+      <DataNotice loading={loading} error={error || actionError} />
      
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-sky-100 shadow-sm">
@@ -216,22 +163,9 @@ export function Notifications() {
             const sentAt = notification.sent_at || notification.sentAt || notification.created_at;
             const status = notification.status || notification.delivery_status || 'Sent';
             const incidentId = notification.incident_id || notification.incidentId;
+            const isReg = String(notification.type || '').toLowerCase().includes('registration');
 
-            const priority = (notification.priority || notification.priority_level || '').toLowerCase();
-            const typeStr = (notification.type || notification.title || '').toLowerCase();
-
-            const isCritical = priority === 'urgent' || priority === 'critical' || typeStr.includes('urgent') || typeStr.includes('critical');
-            const isMinor = priority === 'minor' || typeStr.includes('minor') || typeStr.includes('warning');
-
-            const Icon = isCritical
-              ? AlertCircle
-              : isMinor
-                ? AlertTriangle
-                : typeStr.includes('success') || typeStr.includes('resolved')
-                  ? CheckCircle
-                  : typeStr.includes('clock')
-                    ? Clock
-                    : Radio;
+            const Icon = isReg ? UserCheck : (notification.isCritical ? AlertCircle : Radio);
 
             return (
               <Card
@@ -240,24 +174,24 @@ export function Notifications() {
               >
                 <div className="flex items-start gap-4">
                   <div className={`w-12 h-12 ${
-                    isCritical
-                      ? 'bg-red-100 border border-red-200'
-                      : isMinor
-                        ? 'bg-sky-100 border border-sky-200'
+                    isReg
+                      ? 'bg-purple-100 border border-purple-200'
+                      : notification.isCritical
+                        ? 'bg-red-100 border border-red-200'
                         : 'bg-blue-100 border border-blue-200'
                   } rounded-xl flex items-center justify-center flex-shrink-0`}>
                     <Icon className={`w-6 h-6 ${
-                      isCritical
-                        ? 'text-red-600'
-                        : isMinor
-                          ? 'text-sky-700'
+                      isReg
+                        ? 'text-purple-600'
+                        : notification.isCritical
+                          ? 'text-red-600'
                           : 'text-blue-600'
                     }`} />
                   </div>
                   <div className="flex-1 min-w-0 pr-8">
                     <div className="flex items-start justify-between gap-3">
-                      <h3 className="font-bold text-slate-900 text-base">
-                        {notification.title || notification.type || 'System Alert'}
+                      <h3 className="font-bold text-slate-900 text-base capitalize">
+                        {notification.title || notification.notification_type || notification.type || 'System Alert'}
                       </h3>
                       <span className="text-xs text-slate-500 font-mono font-medium">
                         {notificationTime(sentAt)}
@@ -268,21 +202,19 @@ export function Notifications() {
                       {message}
                     </p>
 
-                    {incidentId && (
+                    {incidentId && incidentId !== 'null' && incidentId !== '—' && (
                       <p className="mt-1 text-xs text-blue-600 font-mono font-bold">
                         Related Incident: #{incidentId}
                       </p>
                     )}
 
                     <div className="mt-3 flex items-center gap-2">
-                      <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-xs font-semibold">
+                      <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-xs font-semibold capitalize">
                         Delivery: {status}
                       </Badge>
-                      {notification.priority_level && (
-                        <Badge className={`text-xs font-bold ${isCritical ? 'bg-red-100 text-red-700 border-red-200' : 'bg-sky-100 text-sky-800 border-sky-200'}`}>
-                          Priority: {notification.priority_level}
-                        </Badge>
-                      )}
+                      <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-xs font-bold capitalize">
+                        Type: {notification.type || 'System'}
+                      </Badge>
                     </div>
                   </div>
 

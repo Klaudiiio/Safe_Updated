@@ -16,7 +16,12 @@ import {
   ChevronDown,
   Filter,
   MapPin,
-  Check
+  Check,
+  Edit3,
+  Lock,
+  Mail,
+  Phone,
+  Save
 } from 'lucide-react';
 
 interface StaffDashboardProps {
@@ -130,8 +135,15 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const [mobileMenu, setMobileMenu] = useState(false);
   const [currentTab, setCurrentTab] = useState<'dashboard' | 'assignments' | 'accepted' | 'schedule'>('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
   const [selectedIncidentForUpdate, setSelectedIncidentForUpdate] = useState<IncidentReport | null>(null);
+
+  // Profile Edit States
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editableName, setEditableName] = useState(displayName);
+  const [editableRole, setEditableRole] = useState('Clinic Staff / Medical Responder');
+  const [editableEmail, setEditableEmail] = useState('staff@ustp.edu.ph');
+  const [editablePhone, setEditablePhone] = useState('+63 912 345 6789');
 
   // Status Filter State for Incident Feed
   const [feedStatusFilter, setFeedStatusFilter] = useState<'all' | 'pending' | 'active' | 'assigned' | 'resolved'>('all');
@@ -373,7 +385,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   });
 
   const unreadCount = notifications.filter(n => n.unread).length;
-  const initials = displayName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
+  const initials = editableName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F0F6FF] via-[#E0F2FE] to-[#BAE6FD] font-sans text-slate-800 flex flex-col md:flex-row antialiased">
@@ -387,7 +399,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
       {/* SIDEBAR NAVIGATION */}
       <aside className={`
-        fixed md:static inset-y-0 left-0 z-50 w-64 bg-gradient-to-r from-[#151130] via-[#1a153b] to-[#231e4d] flex flex-col justify-between transform transition-transform duration-200 ease-in-out shadow-xl border-r border-indigo-950/60 p-4
+        fixed md:static inset-y-0 left-0 z-50 w-64 bg-gradient-to-r from-[#0F0C29] via-[#1a153b] to-[#24243E] flex flex-col justify-between transform transition-transform duration-200 ease-in-out shadow-xl border-r border-indigo-950/60 p-4
         ${mobileMenu ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
       `}>
         <div className="space-y-4">
@@ -401,14 +413,14 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               className="flex items-center space-x-3 text-left focus:outline-none group cursor-pointer"
               title="Go to Dashboard"
             >
-              <div className="bg-sky-500 p-2 rounded-xl text-white shadow-md shadow-sky-500/30 group-hover:bg-sky-400 transition-colors shrink-0">
-                <Stethoscope className="w-5 h-5" />
+              <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-md shadow-indigo-600/30 group-hover:bg-indigo-500 transition-colors shrink-0">
+                <Stethoscope className="w-5 h-5 text-indigo-100" />
               </div>
               <div className="flex flex-col min-w-0">
-                <span className="font-extrabold text-white tracking-wider text-base group-hover:text-sky-200 transition-colors truncate">
+                <span className="font-extrabold text-white tracking-wider text-base group-hover:text-indigo-200 transition-colors truncate">
                   SAFE
                 </span>
-                <span className="text-[10px] text-sky-400 tracking-wider uppercase font-semibold truncate">
+                <span className="text-[10px] text-indigo-400 tracking-wider uppercase font-semibold truncate">
                   Emergency Monitor
                 </span>
               </div>
@@ -427,11 +439,11 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               onClick={() => { setCurrentTab('dashboard'); setMobileMenu(false); }}
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer shadow-sm ${
                 currentTab === 'dashboard'
-                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-sky-100'
+                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-indigo-100'
                   : 'bg-white/10 hover:bg-white/20 text-white font-semibold'
               }`}
             >
-              <Activity className={`w-5 h-5 shrink-0 ${currentTab === 'dashboard' ? 'text-sky-600' : 'text-sky-300'}`} />
+              <Activity className={`w-5 h-5 shrink-0 ${currentTab === 'dashboard' ? 'text-indigo-600' : 'text-indigo-300'}`} />
               <span>Dashboard</span>
             </button>
 
@@ -439,18 +451,18 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               onClick={() => { setCurrentTab('assignments'); setMobileMenu(false); }}
               className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer shadow-sm ${
                 currentTab === 'assignments'
-                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-sky-100'
+                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-indigo-100'
                   : 'bg-white/10 hover:bg-white/20 text-white font-semibold'
               }`}
             >
               <div className="flex items-center space-x-3 min-w-0">
-                <ShieldAlert className={`w-5 h-5 shrink-0 ${currentTab === 'assignments' ? 'text-sky-600' : 'text-sky-300'}`} />
+                <ShieldAlert className={`w-5 h-5 shrink-0 ${currentTab === 'assignments' ? 'text-indigo-600' : 'text-indigo-300'}`} />
                 <span className="truncate">Incident Reports</span>
               </div>
               <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ml-2 ${
                 currentTab === 'assignments'
-                  ? 'bg-sky-100 text-sky-700'
-                  : 'bg-slate-900/40 text-sky-200 border border-sky-400/30'
+                  ? 'bg-indigo-100 text-indigo-700'
+                  : 'bg-slate-900/40 text-indigo-200 border border-indigo-400/30'
               }`}>
                 {incidents.length}
               </span>
@@ -460,18 +472,18 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               onClick={() => { setCurrentTab('accepted'); setMobileMenu(false); }}
               className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer shadow-sm ${
                 currentTab === 'accepted'
-                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-blue-100'
+                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-indigo-100'
                   : 'bg-white/10 hover:bg-white/20 text-white font-semibold'
               }`}
             >
               <div className="flex items-center space-x-3 min-w-0">
-                <ClipboardList className={`w-5 h-5 shrink-0 ${currentTab === 'accepted' ? 'text-blue-600' : 'text-blue-300'}`} />
+                <ClipboardList className={`w-5 h-5 shrink-0 ${currentTab === 'accepted' ? 'text-indigo-600' : 'text-indigo-300'}`} />
                 <span className="truncate">Assigned Cases</span>
               </div>
               <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ml-2 ${
                 currentTab === 'accepted'
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'bg-slate-900/40 text-blue-200 border border-blue-400/30'
+                  ? 'bg-indigo-100 text-indigo-700'
+                  : 'bg-slate-900/40 text-indigo-200 border border-indigo-400/30'
               }`}>
                 {assignedCount}
               </span>
@@ -481,34 +493,14 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               onClick={() => { setCurrentTab('schedule'); setMobileMenu(false); }}
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer shadow-sm ${
                 currentTab === 'schedule'
-                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-sky-100'
+                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-indigo-100'
                   : 'bg-white/10 hover:bg-white/20 text-white font-semibold'
               }`}
             >
-              <CalendarDays className={`w-5 h-5 shrink-0 ${currentTab === 'schedule' ? 'text-sky-600' : 'text-sky-300'}`} />
+              <CalendarDays className={`w-5 h-5 shrink-0 ${currentTab === 'schedule' ? 'text-indigo-600' : 'text-indigo-300'}`} />
               <span>Schedule</span>
             </button>
           </nav>
-        </div>
-
-        {/* User Footer Card */}
-        <div className="bg-white/95 backdrop-blur-md rounded-2xl p-3.5 shadow-lg border border-slate-100 flex items-center justify-between">
-          <div className="flex items-center space-x-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-sky-600 flex items-center justify-center font-bold text-white text-sm shrink-0 shadow-md shadow-sky-600/30">
-              {initials}
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-bold text-slate-900 truncate">{displayName}</p>
-              <p className="text-[11px] text-sky-600 font-semibold truncate">Clinic Staff</p>
-            </div>
-          </div>
-          <button
-            onClick={onLogout}
-            title="Sign out"
-            className="text-slate-400 hover:text-rose-600 p-2 rounded-xl hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
         </div>
       </aside>
 
@@ -559,7 +551,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                   }}
                   onFocus={() => setIsSearchFocused(true)}
                   placeholder="Search incidents, reporters, locations..."
-                  className="pl-10 pr-8 py-2 w-80 text-sm bg-indigo-950/80 text-white placeholder-indigo-300 border border-indigo-800 rounded-xl focus:outline-none focus:bg-indigo-950 focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20 transition-all font-medium"
+                  className="pl-10 pr-8 py-2 w-80 text-sm bg-indigo-950/80 text-white placeholder-indigo-300 border border-indigo-800 rounded-xl focus:outline-none focus:bg-indigo-950 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium"
                 />
                 {searchQuery && (
                   <button
@@ -574,12 +566,12 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
               {/* LIVE SEARCH RESULTS DROPDOWN */}
               {isSearchFocused && searchQuery.trim().length > 0 && (
-                <div className="absolute right-0 mt-2 w-96 bg-white rounded-2xl shadow-2xl border border-[#BAE6FD] py-2 z-50 max-h-96 overflow-y-auto divide-y divide-slate-100 text-slate-800">
+                <div className="absolute right-0 mt-2 w-96 bg-white rounded-2xl shadow-2xl border border-indigo-200 py-2 z-50 max-h-96 overflow-y-auto divide-y divide-slate-100 text-slate-800">
                   <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                       Search Results ({filteredIncidents.length})
                     </span>
-                    <span className="text-[11px] text-sky-600 font-medium">Matching Type, Reporter, Location</span>
+                    <span className="text-[11px] text-indigo-600 font-medium">Matching Type, Reporter, Location</span>
                   </div>
 
                   {filteredIncidents.length > 0 ? (
@@ -590,9 +582,9 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                           setCurrentTab('assignments');
                           setIsSearchFocused(false);
                         }}
-                        className="p-3.5 hover:bg-sky-50 transition cursor-pointer flex items-start space-x-3"
+                        className="p-3.5 hover:bg-indigo-50 transition cursor-pointer flex items-start space-x-3"
                       >
-                        <div className="p-2 rounded-xl bg-sky-100 text-sky-700 shrink-0 mt-0.5">
+                        <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700 shrink-0 mt-0.5">
                           <ShieldAlert className="w-4 h-4" />
                         </div>
                         <div className="flex-1 min-w-0">
@@ -600,7 +592,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                             <span className="text-xs font-bold text-slate-900 truncate">
                               #{item.incident_id} {item.incident_name}
                             </span>
-                            <span className="text-[10px] uppercase px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-semibold shrink-0 border border-sky-200">
+                            <span className="text-[10px] uppercase px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold shrink-0 border border-indigo-200">
                               {item.status ?? 'pending'}
                             </span>
                           </div>
@@ -623,10 +615,10 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               <button
                 onClick={() => {
                   setShowNotifications(!showNotifications);
-                  setShowProfileMenu(false);
+                  setShowProfileModal(false);
                 }}
                 className={`relative p-2.5 rounded-xl text-indigo-200 hover:bg-indigo-900/60 transition cursor-pointer ${
-                  showNotifications ? 'bg-indigo-950 text-sky-400' : ''
+                  showNotifications ? 'bg-indigo-950 text-indigo-400' : ''
                 }`}
                 aria-label="Notifications"
               >
@@ -637,12 +629,12 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               </button>
 
               {showNotifications && (
-                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-[#BAE6FD] py-2 z-50 text-slate-800">
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-indigo-200 py-2 z-50 text-slate-800">
                   <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
                     <div className="flex items-center space-x-2">
                       <span className="font-bold text-sm text-slate-900">Notifications</span>
                       {unreadCount > 0 && (
-                        <span className="bg-sky-100 text-sky-800 text-xs px-2 py-0.5 rounded-full font-semibold">
+                        <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-0.5 rounded-full font-semibold">
                           {unreadCount} new
                         </span>
                       )}
@@ -650,7 +642,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                     {notifications.length > 0 && (
                       <button
                         onClick={() => setNotifications(notifications.map(n => ({ ...n, unread: false })))}
-                        className="text-xs font-semibold text-sky-600 hover:underline cursor-pointer"
+                        className="text-xs font-semibold text-indigo-600 hover:underline cursor-pointer"
                       >
                         Mark all as read
                       </button>
@@ -668,11 +660,11 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                             setCurrentTab('assignments');
                           }}
                           className={`p-3.5 hover:bg-slate-50 transition cursor-pointer flex items-start space-x-3 ${
-                            item.unread ? 'bg-sky-50/50' : ''
+                            item.unread ? 'bg-indigo-50/50' : ''
                           }`}
                         >
                           <div className={`p-2 rounded-xl mt-0.5 ${
-                            item.type === 'critical' ? 'bg-rose-100 text-rose-600' : 'bg-sky-100 text-sky-600'
+                            item.type === 'critical' ? 'bg-rose-100 text-rose-600' : 'bg-indigo-100 text-indigo-600'
                           }`}>
                             <AlertTriangle className="w-4 h-4" />
                           </div>
@@ -693,39 +685,20 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               )}
             </div>
 
-            {/* PROFILE DROPDOWN */}
+            {/* PROFILE BUTTON IN TOP RIGHT */}
             <div className="relative">
               <button
                 onClick={() => {
-                  setShowProfileMenu(!showProfileMenu);
+                  setShowProfileModal(true);
                   setShowNotifications(false);
                 }}
                 className="flex items-center space-x-2 p-1.5 rounded-xl hover:bg-indigo-900/60 transition focus:outline-none cursor-pointer"
               >
-                <div className="w-10 h-10 rounded-full bg-sky-600 flex items-center justify-center font-bold text-white text-sm ring-2 ring-sky-400/40 shadow-sm">
+                <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center font-bold text-white text-sm ring-2 ring-indigo-400/40 shadow-sm">
                   {initials}
                 </div>
                 <ChevronDown className="w-4 h-4 text-indigo-300 hidden sm:block" />
               </button>
-
-              {showProfileMenu && (
-                <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-[#BAE6FD] py-1.5 z-50 text-slate-800">
-                  <div className="px-4 py-3 border-b border-slate-100">
-                    <p className="text-sm font-bold text-slate-900">{displayName}</p>
-                    <p className="text-xs text-slate-500 truncate font-medium">Clinic Staff Portal</p>
-                    <span className="inline-block mt-1.5 px-2 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-800 rounded-md">Available</span>
-                  </div>
-                  <div className="pt-1">
-                    <button
-                      onClick={onLogout}
-                      className="w-full text-left px-4 py-2.5 text-xs text-rose-600 hover:bg-rose-50 font-semibold flex items-center space-x-2 cursor-pointer"
-                    >
-                      <LogOut className="w-4 h-4 text-rose-500" />
-                      <span>Sign Out</span>
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </header>
@@ -747,7 +720,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               {/* Stat Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center space-x-4">
-                  <div className="p-3 bg-sky-100 text-sky-600 rounded-xl">
+                  <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
                     <ShieldAlert className="w-6 h-6" />
                   </div>
                   <div>
@@ -793,7 +766,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               {/* Quick Actions & Status Control */}
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                 <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
-                  <Activity className="w-5 h-5 text-sky-600" />
+                  <Activity className="w-5 h-5 text-indigo-600" />
                   <span>Update Your Availability Status</span>
                 </h3>
                 <div className="flex flex-wrap gap-3">
@@ -803,7 +776,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                       onClick={() => updateAvailability(status)}
                       className={`px-4 py-2.5 rounded-xl text-xs font-bold capitalize transition-all cursor-pointer ${
                         availability === status
-                          ? 'bg-sky-600 text-white shadow-md shadow-sky-600/20'
+                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
                     >
@@ -824,7 +797,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                     </div>
                     <button
                       onClick={() => setCurrentTab('assignments')}
-                      className="text-xs font-bold text-sky-600 hover:text-sky-700 flex items-center space-x-0.5 cursor-pointer"
+                      className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center space-x-0.5 cursor-pointer"
                     >
                       <span>View All</span>
                       <ChevronRight className="w-4 h-4" />
@@ -839,7 +812,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                         const statusLower = (inc.status || 'pending').toLowerCase();
                         let badgeBg = 'bg-amber-50 text-amber-700 border-amber-200';
                         if (statusLower === 'active') badgeBg = 'bg-rose-50 text-rose-700 border-rose-200';
-                        else if (['assigned', 'accepted', 'responding'].includes(statusLower)) badgeBg = 'bg-sky-50 text-sky-700 border-sky-200';
+                        else if (['assigned', 'accepted', 'responding'].includes(statusLower)) badgeBg = 'bg-indigo-50 text-indigo-700 border-indigo-200';
                         else if (['resolved', 'completed'].includes(statusLower)) badgeBg = 'bg-emerald-50 text-emerald-700 border-emerald-200';
 
                         let formattedDate = '';
@@ -884,7 +857,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
                             <button
                               onClick={() => setSelectedIncidentForUpdate(inc)}
-                              className="px-4 py-2 bg-[#0EA5E9] hover:bg-[#0284C7] text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-md shadow-sky-500/20 shrink-0 text-center"
+                              className="px-4 py-2 bg-[#4F46E5] hover:bg-[#4338CA] text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-md shadow-indigo-600/20 shrink-0 text-center"
                             >
                               Update
                             </button>
@@ -915,10 +888,10 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                     {acceptedIncidents.length > 0 ? (
                       <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
                         {acceptedIncidents.slice(0, 4).map((inc) => (
-                          <div key={inc.incident_id} className="p-3.5 rounded-xl border border-sky-100 bg-sky-50/50 hover:bg-sky-50 transition space-y-2">
+                          <div key={inc.incident_id} className="p-3.5 rounded-xl border border-indigo-100 bg-indigo-50/50 hover:bg-indigo-50 transition space-y-2">
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-extrabold text-slate-900">#{inc.incident_id} {inc.incident_name}</span>
-                              <span className="text-[10px] uppercase px-2 py-0.5 rounded font-bold bg-sky-100 text-sky-800 border border-sky-200">
+                              <span className="text-[10px] uppercase px-2 py-0.5 rounded font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
                                 {inc.status}
                               </span>
                             </div>
@@ -926,7 +899,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                             <div className="flex justify-end pt-1">
                               <button
                                 onClick={() => setSelectedIncidentForUpdate(inc)}
-                                className="px-3 py-1 bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold rounded-lg transition cursor-pointer shadow-sm"
+                                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold rounded-lg transition cursor-pointer shadow-sm"
                               >
                                 Update Status
                               </button>
@@ -962,7 +935,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                   <select
                     value={feedStatusFilter}
                     onChange={(e) => setFeedStatusFilter(e.target.value as any)}
-                    className="text-xs bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+                    className="text-xs bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                   >
                     <option value="all">All Incidents ({incidents.length})</option>
                     <option value="pending">Pending</option>
@@ -1003,7 +976,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                       <div className="flex items-center space-x-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
                         <button
                           onClick={() => setSelectedIncidentForUpdate(inc)}
-                          className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-sm shadow-sky-600/20"
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-sm shadow-indigo-600/20"
                         >
                           Update Status
                         </button>
@@ -1029,9 +1002,9 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 {acceptedIncidents.length > 0 ? (
                   <div className="space-y-3">
                     {acceptedIncidents.map((inc) => (
-                      <div key={inc.incident_id} className="p-4 rounded-xl border border-sky-100 bg-sky-50/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div key={inc.incident_id} className="p-4 rounded-xl border border-indigo-100 bg-indigo-50/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                         <div className="space-y-1">
-                          <span className="text-xs font-bold text-sky-900">Case #{inc.incident_id}: {inc.incident_name}</span>
+                          <span className="text-xs font-bold text-indigo-900">Case #{inc.incident_id}: {inc.incident_name}</span>
                           <p className="text-xs text-slate-600">📍 {inc.location_description || 'Campus'} • Reported by {inc.reporter_name}</p>
                         </div>
                         <div className="flex items-center space-x-2">
@@ -1055,18 +1028,159 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
           {/* TAB: SCHEDULE */}
           {currentTab === 'schedule' && (
             <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center space-y-3">
-              <CalendarDays className="w-12 h-12 text-sky-600 mx-auto" />
+              <CalendarDays className="w-12 h-12 text-indigo-600 mx-auto" />
               <h3 className="text-lg font-bold text-slate-900">Clinic Staff Duty Schedule</h3>
               <p className="text-xs text-slate-500 max-w-md mx-auto">
                 Your duty roster and shift schedules are synchronized with the University Medical Center portal.
               </p>
-              <div className="inline-block mt-4 px-4 py-2 bg-sky-50 text-sky-700 font-bold text-xs rounded-xl border border-sky-200">
+              <div className="inline-block mt-4 px-4 py-2 bg-indigo-50 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200">
                 Current Shift: Mon - Fri (08:00 AM - 05:00 PM)
               </div>
             </div>
           )}
         </main>
       </div>
+
+      {/* CENTERED PROFILE MODAL CARD */}
+      {showProfileModal && (
+        <div className="fixed inset-0 bg-[#151130]/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-slate-200 overflow-hidden p-6 space-y-5 text-slate-800">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="text-lg font-extrabold text-slate-950">Staff Profile</h3>
+                <p className="text-xs text-slate-500 mt-0.5">View your profile details and account actions</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowProfileModal(false);
+                  setIsEditingProfile(false);
+                }}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-800 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Profile Avatar Card */}
+            <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/50 flex items-center space-x-4">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center font-bold text-white text-base shadow-md shadow-indigo-600/30">
+                {initials}
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-extrabold text-slate-900 truncate">{editableName}</p>
+                <p className="text-xs text-indigo-600 font-semibold truncate">{editableRole}</p>
+              </div>
+            </div>
+
+            {/* Contact Details Card */}
+            <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-2.5">
+              <p className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider">Contact Details</p>
+              <div className="flex items-center space-x-2.5 text-xs text-slate-600 font-medium">
+                <Mail className="w-4 h-4 text-slate-400 shrink-0" />
+                <span className="truncate">{editableEmail}</span>
+              </div>
+              <div className="flex items-center space-x-2.5 text-xs text-slate-600 font-medium">
+                <Phone className="w-4 h-4 text-slate-400 shrink-0" />
+                <span>{editablePhone}</span>
+              </div>
+            </div>
+
+            {/* Editable Profile Section or Action Triggers */}
+            {isEditingProfile ? (
+              <div className="p-4 rounded-2xl border border-indigo-200 bg-indigo-50/40 space-y-3">
+                <p className="text-xs font-bold text-indigo-900">Edit Profile Information</p>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase">Staff Name</label>
+                  <input
+                    type="text"
+                    value={editableName}
+                    onChange={(e) => setEditableName(e.target.value)}
+                    className="w-full mt-1 text-xs px-3 py-2 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase">Role / Title</label>
+                  <input
+                    type="text"
+                    value={editableRole}
+                    onChange={(e) => setEditableRole(e.target.value)}
+                    className="w-full mt-1 text-xs px-3 py-2 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase">Email Address</label>
+                  <input
+                    type="email"
+                    value={editableEmail}
+                    onChange={(e) => setEditableEmail(e.target.value)}
+                    className="w-full mt-1 text-xs px-3 py-2 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-medium"
+                  />
+                </div>
+                <div className="flex space-x-2 pt-1">
+                  <button
+                    onClick={() => setIsEditingProfile(false)}
+                    className="flex-1 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => setIsEditingProfile(false)}
+                    className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1 shadow-sm cursor-pointer"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Save</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <button
+                  onClick={() => setIsEditingProfile(true)}
+                  className="w-full p-3.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 transition flex items-center justify-between cursor-pointer group shadow-sm"
+                >
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600 group-hover:bg-indigo-100 transition">
+                      <Edit3 className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-bold text-slate-900">Update Profile Details</span>
+                  </div>
+                  <span className="text-xs text-indigo-600 font-bold">Edit</span>
+                </button>
+
+                <button
+                  onClick={() => alert('Password update requested. Check your email for instructions.')}
+                  className="w-full p-3.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 transition flex items-center justify-between cursor-pointer group shadow-sm"
+                >
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600 group-hover:bg-indigo-100 transition">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-bold text-slate-900">Update Password</span>
+                  </div>
+                  <span className="text-xs text-indigo-600 font-bold">Secure</span>
+                </button>
+              </div>
+            )}
+
+            {/* Sign Out Action Card */}
+            <div className="pt-2">
+              <button
+                onClick={onLogout}
+                className="w-full p-3.5 rounded-2xl border border-rose-200 bg-rose-50/50 hover:bg-rose-100 transition flex items-center justify-between cursor-pointer group"
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 rounded-xl bg-rose-100 text-rose-600 group-hover:bg-rose-200 transition">
+                    <LogOut className="w-4 h-4" />
+                  </div>
+                  <span className="text-xs font-bold text-rose-700">Sign Out</span>
+                </div>
+                <span className="text-xs text-rose-600 font-bold">Exit</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* UPDATE STATUS MODAL */}
       {selectedIncidentForUpdate && (
@@ -1104,18 +1218,18 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                       onClick={() => updateIncidentStatus(selectedIncidentForUpdate!.incident_id, st.key)}
                       className={`w-full text-left p-3.5 rounded-xl border transition flex items-center justify-between cursor-pointer ${
                         isSelected
-                          ? 'bg-sky-50 border-sky-300 shadow-sm'
+                          ? 'bg-indigo-50 border-indigo-300 shadow-sm'
                           : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100'
                       }`}
                     >
                       <div>
-                        <p className={`text-xs font-extrabold uppercase ${isSelected ? 'text-sky-900' : 'text-slate-900'}`}>
+                        <p className={`text-xs font-extrabold uppercase ${isSelected ? 'text-indigo-900' : 'text-slate-900'}`}>
                           {st.label}
                         </p>
                         <p className="text-[11px] text-slate-500 mt-0.5">{st.desc}</p>
                       </div>
                       {isSelected && (
-                        <div className="w-5 h-5 rounded-full bg-sky-600 text-white flex items-center justify-center shrink-0">
+                        <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0">
                           <Check className="w-3 h-3" />
                         </div>
                       )}
