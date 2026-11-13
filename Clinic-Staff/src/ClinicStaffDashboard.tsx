@@ -3,16 +3,11 @@ import {
   Activity,
   Bell,
   CalendarDays,
-  CheckCircle2,
   ChevronRight,
   ClipboardList,
-  Clock3,
-  HeartPulse,
   LogOut,
-  MapPin,
   Menu,
   Search,
-  CheckCheck,
   ShieldAlert,
   CheckCircle,
   AlertTriangle,
@@ -20,6 +15,8 @@ import {
   X,
   ChevronDown,
   Filter,
+  MapPin,
+  Check
 } from 'lucide-react';
 
 interface StaffDashboardProps {
@@ -218,7 +215,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
         return {
           id: inc.incident_id,
-          title: `${title} (#${inc.incident_id})`,
+          title: `Incident #${inc.incident_id}`,
           message: `${inc.incident_name} at ${inc.location_description || 'Campus'} reported by ${inc.reporter_name}.`,
           time: timeStr,
           type,
@@ -369,11 +366,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const pendingCount = incidents.filter((row) => (row.status?.toLowerCase() ?? 'pending') === 'pending').length;
   const activeCount = incidents.filter((row) => (row.status?.toLowerCase() ?? '') === 'active').length;
   const assignedCount = incidents.filter((row) => ['assigned', 'accepted', 'responding'].includes(row.status?.toLowerCase() ?? '')).length;
-  
-  const allActiveIncidentsCount = incidents.filter((row) => {
-    const s = (row.status || 'pending').toLowerCase();
-    return !['resolved', 'completed', 'cancelled'].includes(s);
-  }).length;
 
   const acceptedIncidents = filteredIncidents.filter((row) => {
     const s = row.status?.toLowerCase() ?? '';
@@ -385,7 +377,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F0F6FF] via-[#E0F2FE] to-[#BAE6FD] font-sans text-slate-800 flex flex-col md:flex-row antialiased">
-
       {/* MOBILE SIDEBAR OVERLAY */}
       {mobileMenu && (
         <div
@@ -396,12 +387,12 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
       {/* SIDEBAR NAVIGATION */}
       <aside className={`
-        fixed md:static inset-y-0 left-0 z-50 w-64 bg-gradient-to-b from-[#151130] via-[#1A153B] to-[#231E4D] text-indigo-200 flex flex-col justify-between transform transition-transform duration-200 ease-in-out shadow-xl
+        fixed md:static inset-y-0 left-0 z-50 w-64 bg-gradient-to-r from-[#151130] via-[#1a153b] to-[#231e4d] flex flex-col justify-between transform transition-transform duration-200 ease-in-out shadow-xl border-r border-indigo-950/60 p-4
         ${mobileMenu ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
       `}>
-        <div>
+        <div className="space-y-4">
           {/* Clickable Brand Logo Header */}
-          <div className="h-20 px-6 flex items-center justify-between border-b border-indigo-950/60">
+          <div className="h-20 px-4 flex items-center justify-between border-b border-indigo-950/60">
             <button
               onClick={() => {
                 setCurrentTab('dashboard');
@@ -410,104 +401,114 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               className="flex items-center space-x-3 text-left focus:outline-none group cursor-pointer"
               title="Go to Dashboard"
             >
-              <div className="bg-sky-500 p-2 rounded-xl text-white shadow-md shadow-sky-500/30 group-hover:bg-sky-400 transition-colors">
+              <div className="bg-sky-500 p-2 rounded-xl text-white shadow-md shadow-sky-500/30 group-hover:bg-sky-400 transition-colors shrink-0">
                 <Stethoscope className="w-5 h-5" />
               </div>
-              <div className="flex flex-col">
-                <span className="font-extrabold text-white tracking-wider text-base group-hover:text-sky-200 transition-colors">
+              <div className="flex flex-col min-w-0">
+                <span className="font-extrabold text-white tracking-wider text-base group-hover:text-sky-200 transition-colors truncate">
                   SAFE
                 </span>
-                <span className="text-[10px] text-sky-400 tracking-wider uppercase font-semibold">
+                <span className="text-[10px] text-sky-400 tracking-wider uppercase font-semibold truncate">
                   Emergency Monitor
                 </span>
               </div>
             </button>
             <button
               onClick={() => setMobileMenu(false)}
-              className="md:hidden text-indigo-300 hover:text-white p-1 rounded-md"
+              className="md:hidden text-indigo-300 hover:text-white p-1 rounded-md shrink-0"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
           {/* Navigation Links */}
-          <nav className="p-4 space-y-1.5">
+          <nav className="space-y-2">
             <button
               onClick={() => { setCurrentTab('dashboard'); setMobileMenu(false); }}
-              className={`w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer shadow-sm ${
                 currentTab === 'dashboard'
-                  ? 'bg-sky-600 text-white shadow-lg shadow-sky-600/30 font-semibold'
-                  : 'hover:bg-indigo-900/50 text-indigo-300 hover:text-white'
+                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-sky-100'
+                  : 'bg-white/10 hover:bg-white/20 text-white font-semibold'
               }`}
             >
-              <Activity className="w-5 h-5 shrink-0" />
+              <Activity className={`w-5 h-5 shrink-0 ${currentTab === 'dashboard' ? 'text-sky-600' : 'text-sky-300'}`} />
               <span>Dashboard</span>
             </button>
 
             <button
               onClick={() => { setCurrentTab('assignments'); setMobileMenu(false); }}
-              className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer shadow-sm ${
                 currentTab === 'assignments'
-                  ? 'bg-sky-600 text-white shadow-lg shadow-sky-600/30 font-semibold'
-                  : 'hover:bg-indigo-900/50 text-indigo-300 hover:text-white'
+                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-sky-100'
+                  : 'bg-white/10 hover:bg-white/20 text-white font-semibold'
               }`}
             >
               <div className="flex items-center space-x-3 min-w-0">
-                <ShieldAlert className="w-5 h-5 shrink-0" />
+                <ShieldAlert className={`w-5 h-5 shrink-0 ${currentTab === 'assignments' ? 'text-sky-600' : 'text-sky-300'}`} />
                 <span className="truncate">Incident Reports</span>
               </div>
-              <span className="bg-indigo-950/80 text-sky-300 border border-sky-800 text-xs px-2 py-0.5 rounded-full font-bold shrink-0 ml-2">{incidents.length}</span>
+              <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ml-2 ${
+                currentTab === 'assignments'
+                  ? 'bg-sky-100 text-sky-700'
+                  : 'bg-slate-900/40 text-sky-200 border border-sky-400/30'
+              }`}>
+                {incidents.length}
+              </span>
             </button>
 
             <button
               onClick={() => { setCurrentTab('accepted'); setMobileMenu(false); }}
-              className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer shadow-sm ${
                 currentTab === 'accepted'
-                  ? 'bg-sky-600 text-white shadow-lg shadow-sky-600/30 font-semibold'
-                  : 'hover:bg-indigo-900/50 text-indigo-300 hover:text-white'
+                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-blue-100'
+                  : 'bg-white/10 hover:bg-white/20 text-white font-semibold'
               }`}
             >
               <div className="flex items-center space-x-3 min-w-0">
-                <ClipboardList className="w-5 h-5 shrink-0" />
+                <ClipboardList className={`w-5 h-5 shrink-0 ${currentTab === 'accepted' ? 'text-blue-600' : 'text-blue-300'}`} />
                 <span className="truncate">Assigned Cases</span>
               </div>
-              <span className="bg-indigo-950/80 text-blue-300 border border-blue-800 text-xs px-2 py-0.5 rounded-full font-bold shrink-0 ml-2">{assignedCount}</span>
+              <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ml-2 ${
+                currentTab === 'accepted'
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'bg-slate-900/40 text-blue-200 border border-blue-400/30'
+              }`}>
+                {assignedCount}
+              </span>
             </button>
 
             <button
               onClick={() => { setCurrentTab('schedule'); setMobileMenu(false); }}
-              className={`w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer shadow-sm ${
                 currentTab === 'schedule'
-                  ? 'bg-sky-600 text-white shadow-lg shadow-sky-600/30 font-semibold'
-                  : 'hover:bg-indigo-900/50 text-indigo-300 hover:text-white'
+                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-sky-100'
+                  : 'bg-white/10 hover:bg-white/20 text-white font-semibold'
               }`}
             >
-              <CalendarDays className="w-5 h-5 shrink-0" />
+              <CalendarDays className={`w-5 h-5 shrink-0 ${currentTab === 'schedule' ? 'text-sky-600' : 'text-sky-300'}`} />
               <span>Schedule</span>
             </button>
           </nav>
         </div>
 
-        {/* User Footer */}
-        <div className="p-4 border-t border-indigo-950/60">
-          <div className="bg-indigo-950/50 rounded-xl p-3 flex items-center justify-between border border-indigo-900/40">
-            <div className="flex items-center space-x-3 overflow-hidden">
-              <div className="w-9 h-9 rounded-full bg-sky-600 flex items-center justify-center font-bold text-white text-sm shrink-0 shadow-sm">
-                {initials}
-              </div>
-              <div className="truncate">
-                <p className="text-sm font-medium text-white truncate">{displayName}</p>
-                <p className="text-xs text-sky-400 truncate">Clinic Staff</p>
-              </div>
+        {/* User Footer Card */}
+        <div className="bg-white/95 backdrop-blur-md rounded-2xl p-3.5 shadow-lg border border-slate-100 flex items-center justify-between">
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-sky-600 flex items-center justify-center font-bold text-white text-sm shrink-0 shadow-md shadow-sky-600/30">
+              {initials}
             </div>
-            <button
-              onClick={onLogout}
-              title="Sign out"
-              className="text-indigo-400 hover:text-rose-400 p-1.5 rounded-lg hover:bg-indigo-900/50 transition-colors cursor-pointer"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-slate-900 truncate">{displayName}</p>
+              <p className="text-[11px] text-sky-600 font-semibold truncate">Clinic Staff</p>
+            </div>
           </div>
+          <button
+            onClick={onLogout}
+            title="Sign out"
+            className="text-slate-400 hover:text-rose-600 p-2 rounded-xl hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </aside>
 
@@ -558,7 +559,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                   }}
                   onFocus={() => setIsSearchFocused(true)}
                   placeholder="Search incidents, reporters, locations..."
-                  className="pl-10 pr-8 py-2 w-80 text-sm bg-indigo-950/80 text-white placeholder-indigo-300 border border-indigo-800 rounded-xl focus:outline-none focus:bg-indigo-950 focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20 transition-all"
+                  className="pl-10 pr-8 py-2 w-80 text-sm bg-indigo-950/80 text-white placeholder-indigo-300 border border-indigo-800 rounded-xl focus:outline-none focus:bg-indigo-950 focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20 transition-all font-medium"
                 />
                 {searchQuery && (
                   <button
@@ -597,7 +598,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between">
                             <span className="text-xs font-bold text-slate-900 truncate">
-                              #{item.incident_id} • {item.incident_name}
+                              #{item.incident_id} {item.incident_name}
                             </span>
                             <span className="text-[10px] uppercase px-2 py-0.5 rounded bg-sky-50 text-sky-700 font-semibold shrink-0 border border-sky-200">
                               {item.status ?? 'pending'}
@@ -609,7 +610,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                       </div>
                     ))
                   ) : (
-                    <div className="p-6 text-center text-xs text-slate-400">
+                    <div className="p-6 text-center text-xs text-slate-400 font-medium">
                       No matching incidents found for "{searchQuery}"
                     </div>
                   )}
@@ -678,14 +679,14 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between">
                               <p className="text-xs font-semibold text-slate-900 truncate">{item.title}</p>
-                              <span className="text-[10px] text-slate-400 shrink-0">{item.time}</span>
+                              <span className="text-[10px] text-slate-400 shrink-0 font-medium">{item.time}</span>
                             </div>
-                            <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{item.message}</p>
+                            <p className="text-xs text-slate-500 mt-0.5 line-clamp-2 font-normal">{item.message}</p>
                           </div>
                         </div>
                       ))
                     ) : (
-                      <div className="p-6 text-center text-xs text-slate-400">No incident notifications</div>
+                      <div className="p-6 text-center text-xs text-slate-400 font-medium">No incident notifications</div>
                     )}
                   </div>
                 </div>
@@ -711,7 +712,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-[#BAE6FD] py-1.5 z-50 text-slate-800">
                   <div className="px-4 py-3 border-b border-slate-100">
                     <p className="text-sm font-bold text-slate-900">{displayName}</p>
-                    <p className="text-xs text-slate-500 truncate">Clinic Staff Portal</p>
+                    <p className="text-xs text-slate-500 truncate font-medium">Clinic Staff Portal</p>
                     <span className="inline-block mt-1.5 px-2 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-800 rounded-md">Available</span>
                   </div>
                   <div className="pt-1">
@@ -726,442 +727,415 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 </div>
               )}
             </div>
-
           </div>
         </header>
 
-        {/* VIEW AREA */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-8">
-
-          {/* ACTIVE SEARCH FILTER STATUS BANNER */}
-          {searchQuery && (
-            <div className="mb-6 flex items-center justify-between bg-sky-50 border border-sky-200 px-4 py-3 rounded-2xl max-w-7xl mx-auto shadow-sm">
-              <p className="text-xs text-sky-900">
-                Found <strong className="font-bold">{filteredIncidents.length}</strong> matching result(s) for query: <strong className="font-bold">"{searchQuery}"</strong>
-              </p>
-              <button
-                onClick={() => setSearchQuery('')}
-                className="text-xs font-semibold text-sky-700 hover:text-sky-900 underline cursor-pointer shrink-0 ml-2"
-              >
-                Clear Search
+        {/* CONTENT AREA */}
+        <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+          {error && (
+            <div className="mb-6 bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 rounded-xl text-sm font-medium flex items-center justify-between">
+              <span>{error}</span>
+              <button onClick={() => setError('')} className="text-rose-500 hover:text-rose-700">
+                <X className="w-4 h-4" />
               </button>
             </div>
           )}
 
-          {/* AVAILABILITY TOGGLE HEADER (ONLY ON DASHBOARD) */}
+          {/* TAB: DASHBOARD OVERVIEW */}
           {currentTab === 'dashboard' && (
-            <div className="mb-6 flex flex-wrap items-end justify-between gap-4 max-w-7xl mx-auto">
-              <div>
-                <p className="text-sm text-slate-600 font-medium">Clinic Staff Portal Overview</p>
-                <h1 className="mt-1 text-2xl md:text-3xl font-extrabold text-slate-900">Good morning, {displayName}</h1>
-              </div>
-              <div className="flex rounded-xl border border-[#BAE6FD] bg-white p-1 shadow-sm">
-                {['available', 'busy', 'offline'].map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => void updateAvailability(status)}
-                    className={`rounded-lg px-3.5 py-2 text-xs font-semibold capitalize transition-all cursor-pointer ${
-                      availability.toLowerCase() === status
-                        ? status === 'available'
-                          ? 'bg-emerald-600 text-white shadow-sm'
-                          : status === 'busy'
-                          ? 'bg-amber-600 text-white shadow-sm'
-                          : 'bg-slate-700 text-white shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    {status}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {error && <div className="mb-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 max-w-7xl mx-auto">{error}</div>}
-
-          {/* DASHBOARD TAB CONTENT */}
-          {currentTab === 'dashboard' && (
-            <div className="max-w-7xl mx-auto space-y-6">
-              {/* Reference-Matched 4-Card Metrics Grid */}
+            <div className="space-y-6">
+              {/* Stat Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white p-5 rounded-2xl border border-[#BAE6FD] shadow-sm flex items-center justify-between">
-                  <div>
-                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">All Active Incidents</p>
-                    <p className="text-3xl font-extrabold text-slate-900 mt-1">{allActiveIncidentsCount}</p>
-                    <p className="text-[11px] text-sky-600 mt-1 font-medium">Total Tracked</p>
-                  </div>
-                  <div className="p-3 bg-sky-50 text-sky-600 rounded-2xl border border-sky-100">
-                    <Activity className="w-6 h-6" />
-                  </div>
-                </div>
-
-                <div className="bg-white p-5 rounded-2xl border border-[#BAE6FD] shadow-sm flex items-center justify-between">
-                  <div>
-                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Active Emergencies</p>
-                    <p className="text-3xl font-extrabold text-slate-900 mt-1">{activeCount}</p>
-                    <p className="text-[11px] text-rose-600 mt-1 font-medium">Requires Attention</p>
-                  </div>
-                  <div className="p-3 bg-rose-50 text-rose-600 rounded-2xl border border-rose-100">
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center space-x-4">
+                  <div className="p-3 bg-sky-100 text-sky-600 rounded-xl">
                     <ShieldAlert className="w-6 h-6" />
                   </div>
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Incidents</p>
+                    <p className="text-2xl font-extrabold text-slate-900">{incidents.length}</p>
+                  </div>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl border border-[#BAE6FD] shadow-sm flex items-center justify-between">
-                  <div>
-                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Assigned Cases</p>
-                    <p className="text-3xl font-extrabold text-slate-900 mt-1">{assignedCount}</p>
-                    <p className="text-[11px] text-blue-600 mt-1">Under Management</p>
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center space-x-4">
+                  <div className="p-3 bg-amber-100 text-amber-600 rounded-xl">
+                    <AlertTriangle className="w-6 h-6" />
                   </div>
-                  <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl border border-blue-100">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Pending / Active</p>
+                    <p className="text-2xl font-extrabold text-slate-900">{pendingCount + activeCount}</p>
+                  </div>
+                </div>
+
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center space-x-4">
+                  <div className="p-3 bg-blue-100 text-blue-600 rounded-xl">
                     <ClipboardList className="w-6 h-6" />
                   </div>
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Assigned Cases</p>
+                    <p className="text-2xl font-extrabold text-slate-900">{assignedCount}</p>
+                  </div>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl border border-[#BAE6FD] shadow-sm flex items-center justify-between">
-                  <div>
-                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Pending Reports</p>
-                    <p className="text-3xl font-extrabold text-slate-900 mt-1">{pendingCount}</p>
-                    <p className="text-[11px] text-slate-400 mt-1">Awaiting Assignment</p>
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center space-x-4">
+                  <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl">
+                    <CheckCircle className="w-6 h-6" />
                   </div>
-                  <div className="p-3 bg-amber-50 text-amber-600 rounded-2xl border border-amber-100">
-                    <Clock3 className="w-6 h-6" />
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Staff Status</p>
+                    <p className="text-sm font-bold capitalize text-emerald-700 mt-1 flex items-center space-x-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-ping" />
+                      <span>{availability}</span>
+                    </p>
                   </div>
                 </div>
               </div>
 
-              {/* TWO-COLUMN LAYOUT: Scrollable Incident Feed on Left, Assigned Cases Card on Lower Right */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-                
-                {/* Left Side: Recent Incidents Overview (Spans 2 columns) with Scrollable Feed */}
-                <div className="lg:col-span-2 bg-white rounded-2xl border border-[#BAE6FD] shadow-sm overflow-hidden flex flex-col">
-                  <div className="px-6 py-4 border-b border-sky-100 flex items-center justify-between shrink-0">
+              {/* Quick Actions & Status Control */}
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
+                  <Activity className="w-5 h-5 text-sky-600" />
+                  <span>Update Your Availability Status</span>
+                </h3>
+                <div className="flex flex-wrap gap-3">
+                  {['available', 'busy', 'on-leave', 'offline'].map((status) => (
+                    <button
+                      key={status}
+                      onClick={() => updateAvailability(status)}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-bold capitalize transition-all cursor-pointer ${
+                        availability === status
+                          ? 'bg-sky-600 text-white shadow-md shadow-sky-600/20'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {status}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* RECENT INCIDENT FEED & LOWER RIGHT ASSIGNED CASES GRID */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Recent Incident Feed (Takes 2 columns) */}
+                <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+                  <div className="p-6 border-b border-slate-100 flex items-center justify-between">
                     <div>
-                      <h2 className="font-bold text-slate-900 text-base">Incident Feed</h2>
-                      <p className="text-xs text-slate-500">Prioritized & Filtered Feed</p>
+                      <h3 className="text-base font-bold text-slate-900">Recent Incident Feed</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">Prioritized incoming emergency reports</p>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      {/* STATUS FILTER DROPDOWN FOR FEED */}
-                      <div className="flex items-center space-x-1.5 bg-sky-50 border border-sky-200 px-3 py-1.5 rounded-xl">
-                        <Filter className="w-3.5 h-3.5 text-sky-600" />
-                        <select
-                          value={feedStatusFilter}
-                          onChange={(e) => setFeedStatusFilter(e.target.value as any)}
-                          className="bg-transparent text-xs font-semibold text-sky-900 focus:outline-none cursor-pointer capitalize"
-                        >
-                          <option value="all">All Status</option>
-                          <option value="pending">Pending</option>
-                          <option value="active">Active</option>
-                          <option value="assigned">Assigned</option>
-                          <option value="resolved">Resolved</option>
-                        </select>
-                      </div>
-
-                      <button
-                        onClick={() => setCurrentTab('assignments')}
-                        className="text-xs font-semibold text-sky-600 hover:text-sky-700 flex items-center space-x-1 cursor-pointer hidden sm:flex"
-                      >
-                        <span>View all</span>
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => setCurrentTab('assignments')}
+                      className="text-xs font-bold text-sky-600 hover:text-sky-700 flex items-center space-x-0.5 cursor-pointer"
+                    >
+                      <span>View All</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
                   </div>
 
-                  {/* Scrollable Feed Container */}
-                  <div className="max-h-[440px] overflow-y-auto divide-y divide-sky-50">
-                    {prioritizedAndFilteredIncidents.map((inc) => (
-                      <div key={inc.incident_id} className="p-4 sm:px-6 flex items-center justify-between hover:bg-sky-50/40 transition">
-                        <div className="flex items-start space-x-3 min-w-0">
-                          <div className="p-2.5 rounded-xl bg-sky-50 text-sky-600 shrink-0 mt-0.5 border border-sky-100">
-                            <Stethoscope className="w-4 h-4" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-900 truncate">
-                              #{inc.incident_id} • {inc.incident_name}
-                            </p>
-                            <p className="text-xs text-slate-500 truncate mt-0.5">📍 {inc.location_description || 'Campus'} • Reported by {inc.reporter_name}</p>
-                          </div>
-                        </div>
-                        <span className={`text-[11px] font-semibold px-3 py-1 rounded-full uppercase tracking-wider shrink-0 ml-2 ${
-                          inc.status === 'resolved' ? 'bg-emerald-100 text-emerald-800' :
-                          inc.status === 'active' || inc.status === 'critical' ? 'bg-rose-100 text-rose-800' :
-                          ['assigned', 'accepted', 'responding'].includes(inc.status || '') ? 'bg-blue-100 text-blue-800' : 'bg-sky-100 text-sky-800'
-                        }`}>
-                          {inc.status || 'pending'}
-                        </span>
-                      </div>
-                    ))}
-                    {prioritizedAndFilteredIncidents.length === 0 && (
-                      <div className="p-8 text-center text-sm text-slate-400">No incident reports found for this filter.</div>
-                    )}
-                  </div>
-                </div>
+                  {loading ? (
+                    <div className="py-12 text-center text-slate-400 font-medium text-sm">Loading incident reports...</div>
+                  ) : incidents.length > 0 ? (
+                    <div className="divide-y divide-slate-100 flex-1">
+                      {incidents.slice(0, 4).map((inc) => {
+                        const statusLower = (inc.status || 'pending').toLowerCase();
+                        let badgeBg = 'bg-amber-50 text-amber-700 border-amber-200';
+                        if (statusLower === 'active') badgeBg = 'bg-rose-50 text-rose-700 border-rose-200';
+                        else if (['assigned', 'accepted', 'responding'].includes(statusLower)) badgeBg = 'bg-sky-50 text-sky-700 border-sky-200';
+                        else if (['resolved', 'completed'].includes(statusLower)) badgeBg = 'bg-emerald-50 text-emerald-700 border-emerald-200';
 
-                {/* Right Side / Lower Right: Your Assigned Cases Card */}
-                <div className="bg-white rounded-2xl border border-[#BAE6FD] shadow-sm overflow-hidden sticky top-28">
-                  <div className="px-5 py-4 border-b border-sky-100 flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <ClipboardList className="w-4 h-4 text-sky-600" />
-                      <h2 className="font-bold text-slate-900 text-sm">Assigned Cases</h2>
-                    </div>
-                    <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold px-2.5 py-0.5 rounded-full">
-                      {assignedCount} Active
-                    </span>
-                  </div>
-                  <p className="px-5 pt-2.5 text-[11px] text-slate-500">
-                    Cases managed by {displayName}
-                  </p>
+                        let formattedDate = '';
+                        if (inc.reported_at) {
+                          const d = new Date(inc.reported_at);
+                          const dateStr = d.toLocaleDateString();
+                          const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                          formattedDate = `${dateStr}, ${timeStr}`;
+                        }
 
-                  <div className="p-4 space-y-3 max-h-[420px] overflow-y-auto">
-                    {acceptedIncidents.map((inc) => {
-                      const statusText = (inc.status || 'ASSIGNED').toUpperCase();
-                      return (
-                        <div
-                          key={inc.incident_id}
-                          className="bg-white border border-[#BAE6FD] rounded-xl p-3.5 shadow-sm hover:border-sky-300 transition"
-                        >
-                          <div className="flex items-start justify-between">
-                            <div className="flex items-center space-x-2.5">
-                              <div className="w-8 h-8 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center font-bold text-[11px] shrink-0 border border-sky-100">
-                                #{inc.incident_id}
+                        return (
+                          <div key={inc.incident_id} className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-50/60 transition">
+                            <div className="flex items-start space-x-4">
+                              <div className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-200/60 flex items-center justify-center text-amber-600 shrink-0 mt-0.5 shadow-sm">
+                                <ShieldAlert className="w-5 h-5" />
                               </div>
-                              <div className="min-w-0">
-                                <h3 className="text-xs font-bold text-slate-900 truncate capitalize">
-                                  {inc.incident_name}
-                                </h3>
-                                <p className="text-[11px] text-slate-500 truncate">📍 {inc.location_description || 'Building 9'}</p>
+                              
+                              <div className="space-y-1">
+                                <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
+                                  <span className="text-sm font-extrabold text-slate-900">
+                                    #{inc.incident_id} {inc.incident_name}
+                                  </span>
+                                  <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase border ${badgeBg}`}>
+                                    {inc.status || 'pending'}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-slate-600 flex items-center space-x-1">
+                                  <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                                  <span>{inc.location_description || 'Building 9, 3rd floor'}</span>
+                                </p>
+                                <p className="text-[11px] text-slate-400 flex items-center space-x-1">
+                                  <span>Reported by <strong className="text-slate-600 font-semibold">{inc.reporter_name}</strong></span>
+                                  {formattedDate && (
+                                    <>
+                                      <span>•</span>
+                                      <span>{formattedDate}</span>
+                                    </>
+                                  )}
+                                </p>
                               </div>
                             </div>
-                            <span className={`text-[9px] uppercase font-bold px-2 py-0.5 rounded-full border shrink-0 ${
-                              statusText === 'ACTIVE'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : 'bg-sky-50 text-sky-700 border-sky-200'
-                            }`}>
-                              {statusText}
-                            </span>
-                          </div>
 
-                          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
-                            <span className="text-slate-500 truncate">
-                              👤 <strong className="text-slate-700">{inc.reporter_name}</strong>
-                            </span>
-                            <div className="flex items-center space-x-2 shrink-0">
+                            <button
+                              onClick={() => setSelectedIncidentForUpdate(inc)}
+                              className="px-4 py-2 bg-[#0EA5E9] hover:bg-[#0284C7] text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-md shadow-sky-500/20 shrink-0 text-center"
+                            >
+                              Update
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="py-12 text-center text-slate-400 font-medium text-sm">No incidents reported yet.</div>
+                  )}
+                </div>
+
+                {/* Lower Right Assigned Cases Card */}
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
+                      <div className="flex items-center space-x-2">
+                        <div className="p-2 bg-blue-100 text-blue-600 rounded-xl">
+                          <ClipboardList className="w-4 h-4" />
+                        </div>
+                        <h3 className="text-base font-bold text-slate-900">Assigned Cases</h3>
+                      </div>
+                      <span className="text-xs font-bold bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full border border-blue-200">
+                        {assignedCount} active
+                      </span>
+                    </div>
+
+                    {acceptedIncidents.length > 0 ? (
+                      <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                        {acceptedIncidents.slice(0, 4).map((inc) => (
+                          <div key={inc.incident_id} className="p-3.5 rounded-xl border border-sky-100 bg-sky-50/50 hover:bg-sky-50 transition space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-extrabold text-slate-900">#{inc.incident_id} {inc.incident_name}</span>
+                              <span className="text-[10px] uppercase px-2 py-0.5 rounded font-bold bg-sky-100 text-sky-800 border border-sky-200">
+                                {inc.status}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 truncate">📍 {inc.location_description || 'Campus location'}</p>
+                            <div className="flex justify-end pt-1">
                               <button
-                                onClick={() => void updateIncidentStatus(inc.incident_id, 'resolved')}
-                                className="text-emerald-600 hover:text-emerald-700 font-semibold transition cursor-pointer"
+                                onClick={() => setSelectedIncidentForUpdate(inc)}
+                                className="px-3 py-1 bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold rounded-lg transition cursor-pointer shadow-sm"
                               >
-                                Resolve
-                              </button>
-                              <span className="text-slate-300">•</span>
-                              <button
-                                onClick={() => {
-                                  const nextStatus = inc.status === 'active' ? 'assigned' : 'active';
-                                  void updateIncidentStatus(inc.incident_id, nextStatus);
-                                }}
-                                className="text-sky-600 hover:text-sky-700 font-semibold flex items-center space-x-0.5 transition cursor-pointer"
-                              >
-                                <span>Status</span>
-                                <ChevronRight className="w-3 h-3" />
+                                Update Status
                               </button>
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
-
-                    {acceptedIncidents.length === 0 && (
-                      <div className="py-8 text-center text-xs text-slate-400">
-                        No active assigned cases right now.
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="py-16 text-center text-slate-400 text-xs font-medium">
+                        No active assigned cases currently.
                       </div>
                     )}
                   </div>
-                </div>
 
+                  <button
+                    onClick={() => setCurrentTab('accepted')}
+                    className="w-full mt-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer text-center"
+                  >
+                    View All Assigned Cases
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
-          {/* INCIDENT REPORTS TAB CONTENT */}
+          {/* TAB: INCIDENT REPORTS (ASSIGNMENTS) */}
           {currentTab === 'assignments' && (
-            <div className="max-w-7xl mx-auto space-y-4">
-              <div className="bg-white rounded-2xl border border-[#BAE6FD] shadow-sm overflow-hidden flex flex-col">
-                <div className="px-6 py-5 border-b border-sky-100 flex flex-wrap items-center justify-between gap-4 shrink-0">
-                  <div>
-                    <h2 className="font-bold text-slate-900 text-lg">All Incoming & Pending Incidents</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">Prioritized: Pending $\rightarrow$ Active/Assigned $\rightarrow$ Resolved</p>
-                  </div>
-
-                  {/* STATUS FILTER DROPDOWN */}
-                  <div className="flex items-center space-x-2 bg-sky-50 border border-sky-200 px-3.5 py-2 rounded-xl">
-                    <Filter className="w-4 h-4 text-sky-600" />
-                    <span className="text-xs font-semibold text-sky-800">Filter Status:</span>
-                    <select
-                      value={feedStatusFilter}
-                      onChange={(e) => setFeedStatusFilter(e.target.value as any)}
-                      className="bg-white border border-sky-200 text-xs font-semibold text-slate-700 px-2.5 py-1 rounded-lg focus:outline-none focus:border-sky-500 cursor-pointer capitalize shadow-sm"
-                    >
-                      <option value="all">All Statuses</option>
-                      <option value="pending">Pending</option>
-                      <option value="active">Active</option>
-                      <option value="assigned">Assigned</option>
-                      <option value="resolved">Resolved</option>
-                    </select>
-                  </div>
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+                <div className="flex items-center space-x-2">
+                  <Filter className="w-4 h-4 text-slate-400" />
+                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Filter Status:</span>
+                  <select
+                    value={feedStatusFilter}
+                    onChange={(e) => setFeedStatusFilter(e.target.value as any)}
+                    className="text-xs bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+                  >
+                    <option value="all">All Incidents ({incidents.length})</option>
+                    <option value="pending">Pending</option>
+                    <option value="active">Active</option>
+                    <option value="assigned">Assigned / Responding</option>
+                    <option value="resolved">Resolved</option>
+                  </select>
                 </div>
+                <div className="text-xs text-slate-500 font-medium">
+                  Showing {prioritizedAndFilteredIncidents.length} results (Prioritized by urgency)
+                </div>
+              </div>
 
-                {/* Scrollable Feed Container for Assignments Tab */}
-                <div className="max-h-[600px] overflow-y-auto divide-y divide-sky-50">
+              {loading ? (
+                <div className="py-16 text-center text-slate-400 font-medium">Loading reports...</div>
+              ) : prioritizedAndFilteredIncidents.length > 0 ? (
+                <div className="grid grid-cols-1 gap-4">
                   {prioritizedAndFilteredIncidents.map((inc) => (
-                    <div key={inc.incident_id} className="p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-sky-50/30 transition">
-                      <div className="space-y-1">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold text-slate-900">#{inc.incident_id}</span>
-                          <span className="text-sky-700 font-semibold text-sm">• {inc.incident_name}</span>
-                          <span className={`text-[10px] uppercase font-bold px-2.5 py-0.5 rounded-full ${
-                            inc.status === 'resolved' ? 'bg-emerald-100 text-emerald-800' :
-                            inc.status === 'active' || inc.status === 'critical' ? 'bg-rose-100 text-rose-800' :
-                            ['assigned', 'accepted', 'responding'].includes(inc.status || '') ? 'bg-blue-100 text-blue-800' : 'bg-sky-100 text-sky-800'
+                    <div key={inc.incident_id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="space-y-1.5 flex-1">
+                        <div className="flex items-center space-x-3">
+                          <span className="text-sm font-extrabold text-slate-900">#{inc.incident_id} • {inc.incident_name}</span>
+                          <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase border ${
+                            (inc.status || 'pending').toLowerCase() === 'pending'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
+                              : (inc.status || '').toLowerCase() === 'active'
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           }`}>
                             {inc.status || 'pending'}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-600">📍 Location: <strong className="text-slate-800">{inc.location_description || 'Not specified'}</strong></p>
-                        <p className="text-xs text-slate-600">👤 Reporter: <strong className="text-slate-800">{inc.reporter_name}</strong></p>
-                        {inc.description && <p className="text-xs text-slate-600 bg-sky-50/80 border border-sky-100 p-2.5 rounded-xl mt-2">"{inc.description}"</p>}
+                        <p className="text-xs text-slate-600">📍 <strong>Location:</strong> {inc.location_description || 'Not specified'}</p>
+                        <p className="text-xs text-slate-600">👤 <strong>Reporter:</strong> {inc.reporter_name}</p>
+                        {inc.description && <p className="text-xs text-slate-500 italic bg-slate-50 p-2.5 rounded-xl border border-slate-100 mt-2">"{inc.description}"</p>}
                       </div>
-                      <div className="flex items-center space-x-2 shrink-0">
-                        <select
-                          value={inc.status || 'pending'}
-                          onChange={(e) => void updateIncidentStatus(inc.incident_id, e.target.value)}
-                          className="text-xs bg-white border border-[#BAE6FD] rounded-xl px-3 py-2.5 font-semibold text-slate-700 focus:outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 shadow-sm cursor-pointer"
+
+                      <div className="flex items-center space-x-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
+                        <button
+                          onClick={() => setSelectedIncidentForUpdate(inc)}
+                          className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-sm shadow-sky-600/20"
                         >
-                          <option value="pending">Pending</option>
-                          <option value="assigned">Assigned</option>
-                          <option value="accepted">Accepted</option>
-                          <option value="active">Active</option>
-                          <option value="resolved">Resolved</option>
-                        </select>
+                          Update Status
+                        </button>
                       </div>
                     </div>
                   ))}
-                  {prioritizedAndFilteredIncidents.length === 0 && (
-                    <div className="p-12 text-center text-sm text-slate-400">No incident reports found for this filter.</div>
-                  )}
                 </div>
-              </div>
+              ) : (
+                <div className="bg-white p-16 rounded-2xl text-center border border-slate-200">
+                  <ShieldAlert className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                  <p className="text-slate-600 font-bold text-sm">No incident reports found</p>
+                  <p className="text-xs text-slate-400 mt-1">Try changing your status filter or search criteria.</p>
+                </div>
+              )}
             </div>
           )}
 
-          {/* ASSIGNED CASES TAB CONTENT */}
+          {/* TAB: ASSIGNED CASES */}
           {currentTab === 'accepted' && (
-            <div className="max-w-7xl mx-auto space-y-6">
-              <div className="bg-white rounded-2xl border border-[#BAE6FD] shadow-sm overflow-hidden">
-                <div className="px-6 py-5 border-b border-sky-100 flex items-center justify-between">
-                  <div>
-                    <h2 className="font-bold text-slate-900 text-lg">Your Assigned Cases</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">Cases actively assigned to or handled by {displayName}</p>
-                  </div>
-                  <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold px-3.5 py-1.5 rounded-full">
-                    {assignedCount} Active
-                  </span>
-                </div>
-
-                <div className="p-6 space-y-4 max-h-[600px] overflow-y-auto">
-                  {acceptedIncidents.map((inc) => {
-                    const statusText = (inc.status || 'ASSIGNED').toUpperCase();
-                    return (
-                      <div
-                        key={inc.incident_id}
-                        className="bg-white border border-[#BAE6FD] rounded-xl p-5 shadow-sm hover:border-sky-300 transition"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-10 h-10 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center font-bold text-xs shrink-0 border border-sky-100">
-                              #{inc.incident_id}
-                            </div>
-                            <div>
-                              <h3 className="text-sm font-bold text-slate-900 capitalize">
-                                {inc.incident_name}
-                              </h3>
-                              <p className="text-xs text-slate-500 mt-0.5">📍 {inc.location_description || 'Building 9 3rd Floor'}</p>
-                            </div>
-                          </div>
-                          <span className={`text-[10px] uppercase font-bold px-3 py-1 rounded-full border ${
-                            statusText === 'ACTIVE'
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              : 'bg-sky-50 text-sky-700 border-sky-200'
-                          }`}>
-                            {statusText}
-                          </span>
+            <div className="space-y-6">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h3 className="text-base font-bold text-slate-900 mb-4">Your Active Assigned Cases</h3>
+                {acceptedIncidents.length > 0 ? (
+                  <div className="space-y-3">
+                    {acceptedIncidents.map((inc) => (
+                      <div key={inc.incident_id} className="p-4 rounded-xl border border-sky-100 bg-sky-50/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="space-y-1">
+                          <span className="text-xs font-bold text-sky-900">Case #{inc.incident_id}: {inc.incident_name}</span>
+                          <p className="text-xs text-slate-600">📍 {inc.location_description || 'Campus'} • Reported by {inc.reporter_name}</p>
                         </div>
-
-                        <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between text-xs gap-2">
-                          <span className="text-slate-500">
-                            👤 Reported by: <strong className="text-slate-700">{inc.reporter_name}</strong>
-                          </span>
-                          <div className="flex items-center space-x-3">
-                            <button
-                              onClick={() => void updateIncidentStatus(inc.incident_id, 'resolved')}
-                              className="text-emerald-600 hover:text-emerald-700 font-semibold transition cursor-pointer"
-                            >
-                              Mark Resolved
-                            </button>
-                            <span className="text-slate-300">•</span>
-                            <button
-                              onClick={() => {
-                                const nextStatus = inc.status === 'active' ? 'assigned' : 'active';
-                                void updateIncidentStatus(inc.incident_id, nextStatus);
-                              }}
-                              className="text-sky-600 hover:text-sky-700 font-semibold flex items-center space-x-1 transition cursor-pointer"
-                            >
-                              <span>Edit Status</span>
-                              <ChevronRight className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() => setSelectedIncidentForUpdate(inc)}
+                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition cursor-pointer"
+                          >
+                            Update Status
+                          </button>
                         </div>
                       </div>
-                    );
-                  })}
-
-                  {acceptedIncidents.length === 0 && (
-                    <div className="p-12 text-center text-xs text-slate-400">
-                      No active assigned cases right now.
-                    </div>
-                  )}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-12 text-center text-slate-400 text-xs font-medium">No active assigned cases currently.</div>
+                )}
               </div>
             </div>
           )}
 
-          {/* SCHEDULE TAB CONTENT */}
+          {/* TAB: SCHEDULE */}
           {currentTab === 'schedule' && (
-            <div className="max-w-7xl mx-auto space-y-6">
-              <div className="bg-white rounded-2xl border border-[#BAE6FD] shadow-sm p-6 sm:p-8">
-                <h2 className="font-bold text-slate-900 text-lg mb-1">Clinic Staff Duty Roster</h2>
-                <p className="text-xs text-slate-500 mb-6">Weekly shift schedule and emergency standby assignments.</p>
-               
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="p-5 rounded-2xl border border-sky-100 bg-sky-50/50">
-                    <p className="text-xs font-bold text-sky-700 uppercase tracking-wider">Today's Shift</p>
-                    <p className="text-base font-bold text-slate-900 mt-1">08:00 AM – 05:00 PM</p>
-                    <p className="text-xs text-slate-600 mt-2">Status: <span className="text-emerald-600 font-semibold capitalize">{availability}</span></p>
-                  </div>
-                  <div className="p-5 rounded-2xl border border-sky-100 bg-sky-50/50">
-                    <p className="text-xs font-bold text-sky-700 uppercase tracking-wider">Assigned Station</p>
-                    <p className="text-base font-bold text-slate-900 mt-1">Main University Clinic</p>
-                    <p className="text-xs text-slate-600 mt-2">Room 102 • Emergency Response Unit</p>
-                  </div>
-                  <div className="p-5 rounded-2xl border border-sky-100 bg-sky-50/50">
-                    <p className="text-xs font-bold text-sky-700 uppercase tracking-wider">Standby Partner</p>
-                    <p className="text-base font-bold text-slate-900 mt-1">Main University Medical Team B</p>
-                    <p className="text-xs text-slate-600 mt-2">Hotline: Ext. 402</p>
-                  </div>
-                </div>
+            <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center space-y-3">
+              <CalendarDays className="w-12 h-12 text-sky-600 mx-auto" />
+              <h3 className="text-lg font-bold text-slate-900">Clinic Staff Duty Schedule</h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Your duty roster and shift schedules are synchronized with the University Medical Center portal.
+              </p>
+              <div className="inline-block mt-4 px-4 py-2 bg-sky-50 text-sky-700 font-bold text-xs rounded-xl border border-sky-200">
+                Current Shift: Mon - Fri (08:00 AM - 05:00 PM)
               </div>
             </div>
           )}
-
         </main>
       </div>
+
+      {/* UPDATE STATUS MODAL */}
+      {selectedIncidentForUpdate && (
+        <div className="fixed inset-0 bg-[#151130]/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden p-6 space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="text-base font-extrabold text-slate-950">Update Incident Status</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Incident #{selectedIncidentForUpdate?.incident_id} • {selectedIncidentForUpdate?.incident_name}</p>
+              </div>
+              <button
+                onClick={() => setSelectedIncidentForUpdate(null)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">Select New Status</label>
+              
+              <div className="space-y-1.5">
+                {[
+                  { key: 'pending', label: 'Pending', desc: 'Awaiting review or triage' },
+                  { key: 'active', label: 'Active', desc: 'Currently being handled' },
+                  { key: 'assigned', label: 'Assigned', desc: 'Responder en route / assigned' },
+                  { key: 'resolved', label: 'Resolved', desc: 'Case closed and completed' },
+                ].map((st) => {
+                  const currentStatus = (selectedIncidentForUpdate?.status || 'pending').toLowerCase();
+                  const isSelected = currentStatus === st.key;
+
+                  return (
+                    <button
+                      key={st.key}
+                      onClick={() => updateIncidentStatus(selectedIncidentForUpdate!.incident_id, st.key)}
+                      className={`w-full text-left p-3.5 rounded-xl border transition flex items-center justify-between cursor-pointer ${
+                        isSelected
+                          ? 'bg-sky-50 border-sky-300 shadow-sm'
+                          : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <div>
+                        <p className={`text-xs font-extrabold uppercase ${isSelected ? 'text-sky-900' : 'text-slate-900'}`}>
+                          {st.label}
+                        </p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">{st.desc}</p>
+                      </div>
+                      {isSelected && (
+                        <div className="w-5 h-5 rounded-full bg-sky-600 text-white flex items-center justify-center shrink-0">
+                          <Check className="w-3 h-3" />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setSelectedIncidentForUpdate(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
