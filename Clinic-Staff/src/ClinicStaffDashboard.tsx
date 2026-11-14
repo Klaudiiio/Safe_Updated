@@ -9,19 +9,19 @@ import {
   Menu,
   Search,
   ShieldAlert,
-  CheckCircle,
   AlertTriangle,
   Stethoscope,
   X,
   ChevronDown,
   Filter,
   MapPin,
-  Check,
-  Edit3,
   Lock,
   Mail,
   Phone,
-  Save
+  Users,
+  UserCheck,
+  UserPlus,
+  ExternalLink
 } from 'lucide-react';
 
 interface StaffDashboardProps {
@@ -39,6 +39,18 @@ interface IncidentReport {
   incident_name?: string;
   user_id?: number;
   reporter_name?: string;
+  assigned_responder_id?: number;
+  assigned_responder_name?: string;
+}
+
+interface Responder {
+  responder_id?: number;
+  id?: number;
+  name: string;
+  availability_status: string;
+  user_type?: string;
+  contact_number?: string;
+  email?: string;
 }
 
 interface NotificationItem {
@@ -49,6 +61,17 @@ interface NotificationItem {
   type: string;
   unread: boolean;
   incidentId: number;
+}
+
+interface EarthquakeEvent {
+  id: string;
+  magnitude: number;
+  place: string;
+  time: number;
+  url: string;
+  depth_km: number;
+  distance_from_cdo_km: number;
+  source: string;
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/auth';
@@ -81,7 +104,7 @@ async function refreshSupabaseToken(): Promise<string> {
 
 async function supabaseRequest(path: string, options: RequestInit = {}): Promise<any> {
   if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error('Supabase is not configured.');
- 
+
   let token = localStorage.getItem('clinic_staff_supabase_token');
   if (!token) {
     token = await refreshSupabaseToken();
@@ -106,7 +129,7 @@ async function supabaseRequest(path: string, options: RequestInit = {}): Promise
     try {
       const freshToken = await refreshSupabaseToken();
       response = await executeFetch(freshToken);
-    } catch (refreshErr) {
+    } catch {
       throw new Error('Your session has expired. Please sign in again.');
     }
   }
@@ -129,28 +152,33 @@ async function supabaseRequest(path: string, options: RequestInit = {}): Promise
 
 export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDashboardProps) {
   const [incidents, setIncidents] = useState<IncidentReport[]>([]);
-  const [availability, setAvailability] = useState('available');
+  const [responders, setResponders] = useState<Responder[]>([]);
+  const [earthquakes, setEarthquakes] = useState<EarthquakeEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingEarthquakes, setLoadingEarthquakes] = useState(false);
+  const [submittingAssignment, setSubmittingAssignment] = useState(false);
   const [error, setError] = useState('');
   const [mobileMenu, setMobileMenu] = useState(false);
-  const [currentTab, setCurrentTab] = useState<'dashboard' | 'assignments' | 'accepted' | 'schedule'>('dashboard');
+  const [currentTab, setCurrentTab] = useState<'dashboard' | 'assignments' | 'accepted' | 'roster' | 'schedule'>('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+
+  // Modals State
   const [selectedIncidentForUpdate, setSelectedIncidentForUpdate] = useState<IncidentReport | null>(null);
+  const [selectedResponderIdForModal, setSelectedResponderIdForModal] = useState<number>(0);
+  const [selectedResponderForDetails, setSelectedResponderForDetails] = useState<Responder | null>(null);
+  const [selectedEarthquakeForDetails, setSelectedEarthquakeForDetails] = useState<EarthquakeEvent | null>(null);
 
   // Profile Edit States
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [editableName, setEditableName] = useState(displayName);
-  const [editableRole, setEditableRole] = useState('Clinic Staff / Medical Responder');
-  const [editableEmail, setEditableEmail] = useState('staff@ustp.edu.ph');
-  const [editablePhone, setEditablePhone] = useState('+63 912 345 6789');
+  const [editableName] = useState(displayName);
+  const [editableRole] = useState('Clinic Dispatch & Roster Coordinator');
+  const [editableEmail] = useState('clinic.dispatch@ustp.edu.ph');
+  const [editablePhone] = useState('+63 912 345 6789');
 
-  // Status Filter State for Incident Feed
+  // Filter & Search States
   const [feedStatusFilter, setFeedStatusFilter] = useState<'all' | 'pending' | 'active' | 'assigned' | 'resolved'>('all');
-
-  // Search Query State for Header Bar & Dropdown
+  const [rosterFilter, setRosterFilter] = useState<'all' | 'available' | 'busy' | 'offline'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
   // Live Date and Time State
@@ -163,56 +191,144 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     return () => clearInterval(timer);
   }, []);
 
-  // Close search dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
-        setIsSearchFocused(false);
+        // click outside handled
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Dynamic notifications state generated from incidents
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
-  const loadIncidents = useCallback(async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      let rawData: any[] = [];
-     
+      let rawIncidents: any[] = [];
       try {
-        const queryWithUser = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name),user(username),users(username)';
-        rawData = await supabaseRequest(`incident?select=${queryWithUser}&order=reported_at.desc`);
+        const queryWithUser = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name),user(username,name),users(username,name),auth_user(username)';
+        rawIncidents = await supabaseRequest(`incident?select=${queryWithUser}&order=reported_at.desc`);
       } catch {
-        const baseQuery = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name)';
-        rawData = await supabaseRequest(`incident?select=${baseQuery}&order=reported_at.desc`);
+        try {
+          const queryFallback = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name),users(username)';
+          rawIncidents = await supabaseRequest(`incident?select=${queryFallback}&order=reported_at.desc`);
+        } catch {
+          const baseQuery = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name)';
+          rawIncidents = await supabaseRequest(`incident?select=${baseQuery}&order=reported_at.desc`);
+        }
       }
-     
-      const formatted = (rawData || []).map((row: any) => ({
-        ...row,
-        incident_name: row.incident_types?.incident_name || 'General Incident',
-        reporter_name: row.user?.username || row.users?.username || row.user_name || (row.user_id ? `User #${row.user_id}` : 'Anonymous User'),
-      }));
 
-      setIncidents(formatted);
+      let rawResponders: any[] = [];
+      try {
+        rawResponders = await supabaseRequest('responder?select=*&order=name.asc');
+      } catch (err) {
+        console.error('Failed to load responder roster:', err);
+      }
+      setResponders(rawResponders || []);
 
-      // Dynamically populate notifications from the fetched incident reports
-      const generatedNotifications: NotificationItem[] = formatted.map((inc: IncidentReport) => {
+      const assignmentMap: Record<number, number> = {};
+      try {
+        const notifAssignments = await supabaseRequest('responder_notification?select=incident_id,responder_id&order=created_at.desc');
+        if (Array.isArray(notifAssignments)) {
+          notifAssignments.forEach((n: any) => {
+            if (n.incident_id && n.responder_id && !assignmentMap[n.incident_id]) {
+              assignmentMap[n.incident_id] = n.responder_id;
+            }
+          });
+        }
+      } catch {
+        try {
+          const notifAssignmentsAlt = await supabaseRequest('responder_notification?select=incident_id,responder_id');
+          if (Array.isArray(notifAssignmentsAlt)) {
+            notifAssignmentsAlt.forEach((n: any) => {
+              if (n.incident_id && n.responder_id) {
+                assignmentMap[n.incident_id] = n.responder_id;
+              }
+            });
+          }
+        } catch {}
+      }
+
+      const userIds = Array.from(new Set((rawIncidents || []).map(r => r.user_id).filter(Boolean)));
+      const usernameMap: Record<number, string> = {};
+
+      try {
+        const allUsers = await supabaseRequest('user?select=*');
+        if (Array.isArray(allUsers)) {
+          allUsers.forEach((u: any) => {
+            const uid = u.user_id ?? u.id;
+            const uname = u.username || u.name;
+            if (uid && uname) usernameMap[uid] = uname;
+          });
+        }
+      } catch {
+        try {
+          const allUsersAlt = await supabaseRequest('users?select=*');
+          if (Array.isArray(allUsersAlt)) {
+            allUsersAlt.forEach((u: any) => {
+              const uid = u.user_id ?? u.id;
+              const uname = u.username || u.name;
+              if (uid && uname) usernameMap[uid] = uname;
+            });
+          }
+        } catch {}
+      }
+
+      for (const uid of userIds) {
+        if (!usernameMap[uid]) {
+          try {
+            const uRes = await supabaseRequest(`user?user_id=eq.${uid}&select=username,name`);
+            if (Array.isArray(uRes) && uRes.length > 0) {
+              usernameMap[uid] = uRes[0].username || uRes[0].name;
+            }
+          } catch {}
+        }
+      }
+
+      const responderMap: Record<number, string> = {};
+      (rawResponders || []).forEach((resp: any) => {
+        const rid = resp.responder_id ?? resp.id;
+        if (rid) responderMap[rid] = resp.name;
+      });
+
+      const formattedIncidents: IncidentReport[] = (rawIncidents || []).map((row: any) => {
+        const embeddedName =
+          row.user?.username ||
+          row.user?.name ||
+          row.users?.username ||
+          row.users?.name ||
+          row.auth_user?.username;
+
+        const lookupName = row.user_id ? usernameMap[row.user_id] : undefined;
+        const resolvedReporterName = embeddedName || lookupName || row.user_name || (row.user_id ? `User #${row.user_id}` : 'Anonymous User');
+
+        const assignedId = row.assigned_responder_id ?? assignmentMap[row.incident_id];
+        const assignedName = assignedId ? responderMap[assignedId] : undefined;
+
+        return {
+          ...row,
+          incident_name: row.incident_types?.incident_name || 'General Incident',
+          reporter_name: resolvedReporterName,
+          assigned_responder_id: assignedId,
+          assigned_responder_name: assignedName,
+        };
+      });
+
+      setIncidents(formattedIncidents);
+
+      const generatedNotifications: NotificationItem[] = formattedIncidents.map((inc: IncidentReport) => {
         const statusLower = (inc.status || 'pending').toLowerCase();
-        let title = 'New Incident Reported';
+        let title = `Incident #${inc.incident_id}`;
         let type = 'info';
 
         if (statusLower === 'active' || statusLower === 'critical') {
-          title = 'Critical Incident Logged';
           type = 'critical';
         } else if (['assigned', 'accepted', 'responding'].includes(statusLower)) {
-          title = 'Case Assigned / Updating';
           type = 'assigned';
         } else if (['resolved', 'completed'].includes(statusLower)) {
-          title = 'Incident Resolved';
           type = 'success';
         }
 
@@ -227,7 +343,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
         return {
           id: inc.incident_id,
-          title: `Incident #${inc.incident_id}`,
+          title,
           message: `${inc.incident_name} at ${inc.location_description || 'Campus'} reported by ${inc.reporter_name}.`,
           time: timeStr,
           type,
@@ -238,72 +354,121 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
       setNotifications(generatedNotifications);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Unable to load reported incidents.');
+      setError(loadError instanceof Error ? loadError.message : 'Unable to load incident reports and roster.');
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    void loadIncidents();
-
-    async function fetchStaffStatus() {
-      try {
-        const data = await supabaseRequest(`responder?select=availability_status&name=ilike.${encodeURIComponent(displayName ?? '')}`);
-        if (data && data.length > 0 && data[0].availability_status) {
-          setAvailability(data[0].availability_status.toLowerCase());
-        }
-      } catch (err) {
-        console.error('Failed to fetch initial status:', err);
+  const loadEarthquakes = useCallback(async () => {
+    setLoadingEarthquakes(true);
+    try {
+      const token = localStorage.getItem('clinic_staff_access_token');
+      const res = await fetch(`${API_BASE_URL}/earthquakes/`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setEarthquakes(data.events || []);
       }
+    } catch (err) {
+      console.error('Failed to load earthquake feed:', err);
+    } finally {
+      setLoadingEarthquakes(false);
     }
-    void fetchStaffStatus();
-  }, [loadIncidents, displayName]);
+  }, []);
 
-  const updateAvailability = async (status: string) => {
-    const previousStatus = availability;
-    setAvailability(status);
+  useEffect(() => {
+    void loadData();
+    void loadEarthquakes();
+  }, [loadData, loadEarthquakes]);
+
+  const updateResponderAvailability = async (responder: Responder, newStatus: string) => {
+    const rid = responder.responder_id ?? responder.id;
+    if (!rid) return;
+
+    const filterCol = responder.responder_id ? 'responder_id' : 'id';
     setError('');
 
     try {
-      const response = await supabaseRequest(
-        `responder?name=ilike.${encodeURIComponent(displayName ?? '')}`,
+      await supabaseRequest(
+        `responder?${filterCol}=eq.${rid}`,
         {
           method: 'PATCH',
-          body: JSON.stringify({ availability_status: status }),
+          body: JSON.stringify({ availability_status: newStatus }),
         }
       );
 
-      if (Array.isArray(response) && response.length === 0) {
-        await supabaseRequest(`responder`, {
-          method: 'POST',
-          body: JSON.stringify({
-            name: displayName,
-            availability_status: status,
-            user_type: 'responder',
-          }),
-        });
+      if (selectedResponderForDetails && (selectedResponderForDetails.responder_id ?? selectedResponderForDetails.id) === rid) {
+        setSelectedResponderForDetails({ ...selectedResponderForDetails, availability_status: newStatus });
       }
+      await loadData();
     } catch (err) {
-      setAvailability(previousStatus);
-      setError(err instanceof Error ? err.message : 'Failed to update availability status in Supabase.');
+      setError(err instanceof Error ? err.message : 'Failed to update responder availability status.');
     }
   };
 
-  const updateIncidentStatus = async (incidentId: number, status: string) => {
+  const handleSaveIncidentAssignment = async (incident: IncidentReport, newStatus: string, responderId: number) => {
+    setSubmittingAssignment(true);
+    setError('');
+
     try {
       await supabaseRequest(
-        `incident?incident_id=eq.${incidentId}`,
-        { method: 'PATCH', body: JSON.stringify({ status }) },
+        `incident?incident_id=eq.${incident.incident_id}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ status: newStatus }),
+        }
       );
+
+      if (responderId > 0 && responderId !== incident.assigned_responder_id) {
+        const chosenResponder = responders.find(r => (r.responder_id ?? r.id) === responderId);
+        try {
+          await supabaseRequest('responder_notification', {
+            method: 'POST',
+            body: JSON.stringify({
+              responder_id: responderId,
+              incident_id: incident.incident_id,
+              message: `Assigned to Incident #${incident.incident_id} (${incident.incident_name}) at ${incident.location_description || 'Campus'}.`,
+              is_read: false,
+            }),
+          });
+        } catch {
+          await supabaseRequest('responder_notification', {
+            method: 'POST',
+            body: JSON.stringify({
+              responder_id: responderId,
+              incident_id: incident.incident_id,
+            }),
+          });
+        }
+
+        if (chosenResponder && ['assigned', 'active'].includes(newStatus.toLowerCase())) {
+          await updateResponderAvailability(chosenResponder, 'busy');
+        }
+      }
+
+      if (newStatus.toLowerCase() === 'resolved' && responderId > 0) {
+        const chosenResponder = responders.find(r => (r.responder_id ?? r.id) === responderId);
+        if (chosenResponder) {
+          await updateResponderAvailability(chosenResponder, 'available');
+        }
+      }
+
       setSelectedIncidentForUpdate(null);
-      await loadIncidents();
+      await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update incident status.');
+      setError(err instanceof Error ? err.message : 'Failed to update incident and assign responder.');
+    } finally {
+      setSubmittingAssignment(false);
     }
   };
 
-  // Prioritization helper: Pending (1) -> Active (2) -> Assigned/Accepted (3) -> Resolved (4) -> Others (5)
+  const openManageModal = (item: IncidentReport) => {
+    setSelectedIncidentForUpdate(item);
+    setSelectedResponderIdForModal(item.assigned_responder_id || 0);
+  };
+
   const getStatusPriority = (status?: string): number => {
     const s = (status || 'pending').toLowerCase();
     if (s === 'pending') return 1;
@@ -313,11 +478,8 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     return 5;
   };
 
-  // Sorted and filtered incidents for the Incident Feed / Assignments tab
   const prioritizedAndFilteredIncidents = useMemo(() => {
     let list = [...incidents];
-
-    // Apply Status Dropdown Filter
     if (feedStatusFilter !== 'all') {
       list = list.filter((item) => {
         const s = (item.status || 'pending').toLowerCase();
@@ -327,7 +489,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       });
     }
 
-    // Apply Search Query filter if present
     if (searchQuery.trim()) {
       const queryTerms = searchQuery.toLowerCase().trim().split(/\s+/);
       list = list.filter((item) => {
@@ -335,7 +496,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
         const typeStr = (item.incident_name ?? '').toLowerCase();
         const reporterStr = (item.reporter_name ?? '').toLowerCase();
         const locStr = (item.location_description ?? '').toLowerCase();
-        const descStr = (item.description ?? '').toLowerCase();
+        const assignedStr = (item.assigned_responder_name ?? '').toLowerCase();
         const statusStr = (item.status ?? '').toLowerCase();
 
         return queryTerms.every((term) =>
@@ -343,13 +504,12 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
           typeStr.includes(term) ||
           reporterStr.includes(term) ||
           locStr.includes(term) ||
-          descStr.includes(term) ||
+          assignedStr.includes(term) ||
           statusStr.includes(term)
         );
       });
     }
 
-    // Sort by priority (Pending -> Active -> Assigned -> Resolved)
     return list.sort((a, b) => getStatusPriority(a.status) - getStatusPriority(b.status));
   }, [incidents, feedStatusFilter, searchQuery]);
 
@@ -361,19 +521,26 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       const typeStr = (item.incident_name ?? '').toLowerCase();
       const reporterStr = (item.reporter_name ?? '').toLowerCase();
       const locStr = (item.location_description ?? '').toLowerCase();
-      const descStr = (item.description ?? '').toLowerCase();
-      const statusStr = (item.status ?? '').toLowerCase();
+      const assignedStr = (item.assigned_responder_name ?? '').toLowerCase();
 
       return queryTerms.every((term) =>
         idStr.includes(term) ||
         typeStr.includes(term) ||
         reporterStr.includes(term) ||
         locStr.includes(term) ||
-        descStr.includes(term) ||
-        statusStr.includes(term)
+        assignedStr.includes(term)
       );
     });
   }, [incidents, searchQuery]);
+
+  const filteredResponders = useMemo(() => {
+    if (rosterFilter === 'all') return responders;
+    return responders.filter((r) => (r.availability_status || 'offline').toLowerCase() === rosterFilter);
+  }, [responders, rosterFilter]);
+
+  const availableRespondersList = useMemo(() => {
+    return responders.filter((r) => (r.availability_status || '').toLowerCase() === 'available');
+  }, [responders]);
 
   const pendingCount = incidents.filter((row) => (row.status?.toLowerCase() ?? 'pending') === 'pending').length;
   const activeCount = incidents.filter((row) => (row.status?.toLowerCase() ?? '') === 'active').length;
@@ -388,7 +555,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const initials = editableName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#F0F6FF] via-[#E0F2FE] to-[#BAE6FD] font-sans text-slate-800 flex flex-col md:flex-row antialiased">
+    <div className="min-h-screen bg-gradient-to-br from-[#F0F6FF] via-[#E0F2FE] to-[#BAE6FD] text-slate-800 flex flex-col md:flex-row antialiased">
       {/* MOBILE SIDEBAR OVERLAY */}
       {mobileMenu && (
         <div
@@ -403,7 +570,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
         ${mobileMenu ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
       `}>
         <div className="space-y-4">
-          {/* Clickable Brand Logo Header */}
           <div className="h-20 px-4 flex items-center justify-between border-b border-indigo-950/60">
             <button
               onClick={() => {
@@ -411,7 +577,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 setMobileMenu(false);
               }}
               className="flex items-center space-x-3 text-left focus:outline-none group cursor-pointer"
-              title="Go to Dashboard"
             >
               <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-md shadow-indigo-600/30 group-hover:bg-indigo-500 transition-colors shrink-0">
                 <Stethoscope className="w-5 h-5 text-indigo-100" />
@@ -421,7 +586,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                   SAFE
                 </span>
                 <span className="text-[10px] text-indigo-400 tracking-wider uppercase font-semibold truncate">
-                  Emergency Monitor
+                  Clinic Dispatch
                 </span>
               </div>
             </button>
@@ -433,7 +598,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
             </button>
           </div>
 
-          {/* Navigation Links */}
           <nav className="space-y-2">
             <button
               onClick={() => { setCurrentTab('dashboard'); setMobileMenu(false); }}
@@ -460,9 +624,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 <span className="truncate">Incident Reports</span>
               </div>
               <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ml-2 ${
-                currentTab === 'assignments'
-                  ? 'bg-indigo-100 text-indigo-700'
-                  : 'bg-slate-900/40 text-indigo-200 border border-indigo-400/30'
+                currentTab === 'assignments' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-900/40 text-indigo-200 border border-indigo-400/30'
               }`}>
                 {incidents.length}
               </span>
@@ -481,11 +643,28 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 <span className="truncate">Assigned Cases</span>
               </div>
               <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ml-2 ${
-                currentTab === 'accepted'
-                  ? 'bg-indigo-100 text-indigo-700'
-                  : 'bg-slate-900/40 text-indigo-200 border border-indigo-400/30'
+                currentTab === 'accepted' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-900/40 text-indigo-200 border border-indigo-400/30'
               }`}>
                 {assignedCount}
+              </span>
+            </button>
+
+            <button
+              onClick={() => { setCurrentTab('roster'); setMobileMenu(false); }}
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl text-sm transition-all cursor-pointer shadow-sm ${
+                currentTab === 'roster'
+                  ? 'bg-white text-slate-900 font-extrabold shadow-md border border-indigo-100'
+                  : 'bg-white/10 hover:bg-white/20 text-white font-semibold'
+              }`}
+            >
+              <div className="flex items-center space-x-3 min-w-0">
+                <Users className={`w-5 h-5 shrink-0 ${currentTab === 'roster' ? 'text-indigo-600' : 'text-indigo-300'}`} />
+                <span className="truncate">Staff Roster</span>
+              </div>
+              <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ml-2 ${
+                currentTab === 'roster' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-900/40 text-indigo-200 border border-indigo-400/30'
+              }`}>
+                {availableRespondersList.length}/{responders.length}
               </span>
             </button>
 
@@ -505,30 +684,27 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       </aside>
 
       {/* MAIN CONTAINER */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden" style={{ fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif' }}>
         {/* TOP BAR */}
         <header className="h-20 bg-[#201B50] text-white border-b border-indigo-950 px-4 md:px-8 flex items-center justify-between sticky top-0 z-30 shadow-md">
           <div className="flex items-center space-x-4">
             <button
               onClick={() => setMobileMenu(true)}
               className="md:hidden p-2 text-indigo-200 hover:bg-indigo-900/60 rounded-lg transition cursor-pointer"
-              aria-label="Open sidebar"
             >
               <Menu className="w-6 h-6" />
             </button>
             <div>
               <h1 className="text-2xl md:text-3xl font-extrabold capitalize tracking-tight text-white">
-                {currentTab === 'assignments' ? 'Incident Reports' : currentTab === 'accepted' ? 'Assigned Cases' : currentTab}
+                {currentTab === 'assignments' ? 'Incident Reports' : currentTab === 'accepted' ? 'Assigned Cases' : currentTab === 'roster' ? 'Staff Roster' : currentTab}
               </h1>
               <p className="text-xs md:text-sm text-sky-200 hidden sm:block font-medium">
-                University Medical Clinic • SAFE Portal Staff
+                University Medical Clinic • Dispatch & Roster Management
               </p>
             </div>
           </div>
 
           <div className="flex items-center space-x-4">
-            {/* Live Date and Time Badge */}
             <div className="hidden md:flex flex-col text-right border-r border-indigo-900 pr-4">
               <span className="text-sm font-bold text-white">
                 {currentDateTime.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
@@ -538,79 +714,26 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               </span>
             </div>
 
-            {/* SEARCH BAR WITH LIVE DROPDOWN RESULTS */}
+            {/* SEARCH BAR */}
             <div className="relative hidden lg:block" ref={searchContainerRef}>
               <div className="relative flex items-center">
                 <Search className="w-4 h-4 absolute left-3.5 text-indigo-300" />
                 <input
                   type="text"
                   value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    setIsSearchFocused(true);
-                  }}
-                  onFocus={() => setIsSearchFocused(true)}
-                  placeholder="Search incidents, reporters, locations..."
-                  className="pl-10 pr-8 py-2 w-80 text-sm bg-indigo-950/80 text-white placeholder-indigo-300 border border-indigo-800 rounded-xl focus:outline-none focus:bg-indigo-950 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium"
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search incidents, reporters..."
+                  className="pl-10 pr-8 py-2 w-72 text-sm bg-indigo-950/80 text-white placeholder-indigo-300 border border-indigo-800 rounded-xl focus:outline-none focus:bg-indigo-950 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium"
                 />
                 {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-3 text-indigo-300 hover:text-white"
-                    title="Clear search"
-                  >
+                  <button onClick={() => setSearchQuery('')} className="absolute right-3 text-indigo-300 hover:text-white">
                     <X className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
-
-              {/* LIVE SEARCH RESULTS DROPDOWN */}
-              {isSearchFocused && searchQuery.trim().length > 0 && (
-                <div className="absolute right-0 mt-2 w-96 bg-white rounded-2xl shadow-2xl border border-indigo-200 py-2 z-50 max-h-96 overflow-y-auto divide-y divide-slate-100 text-slate-800">
-                  <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      Search Results ({filteredIncidents.length})
-                    </span>
-                    <span className="text-[11px] text-indigo-600 font-medium">Matching Type, Reporter, Location</span>
-                  </div>
-
-                  {filteredIncidents.length > 0 ? (
-                    filteredIncidents.map((item) => (
-                      <div
-                        key={item.incident_id}
-                        onClick={() => {
-                          setCurrentTab('assignments');
-                          setIsSearchFocused(false);
-                        }}
-                        className="p-3.5 hover:bg-indigo-50 transition cursor-pointer flex items-start space-x-3"
-                      >
-                        <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700 shrink-0 mt-0.5">
-                          <ShieldAlert className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-900 truncate">
-                              #{item.incident_id} {item.incident_name}
-                            </span>
-                            <span className="text-[10px] uppercase px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold shrink-0 border border-indigo-200">
-                              {item.status ?? 'pending'}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-600 truncate mt-0.5">📍 {item.location_description ?? 'No location specified'}</p>
-                          <p className="text-[11px] text-slate-500 truncate">👤 Reported by: <strong className="text-slate-700">{item.reporter_name}</strong></p>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="p-6 text-center text-xs text-slate-400 font-medium">
-                      No matching incidents found for "{searchQuery}"
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
 
-            {/* NOTIFICATIONS DROPDOWN */}
+            {/* NOTIFICATIONS */}
             <div className="relative">
               <button
                 onClick={() => {
@@ -620,7 +743,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 className={`relative p-2.5 rounded-xl text-indigo-200 hover:bg-indigo-900/60 transition cursor-pointer ${
                   showNotifications ? 'bg-indigo-950 text-indigo-400' : ''
                 }`}
-                aria-label="Notifications"
               >
                 <Bell className="w-5 h-5" />
                 {unreadCount > 0 && (
@@ -631,622 +753,678 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               {showNotifications && (
                 <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-indigo-200 py-2 z-50 text-slate-800">
                   <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-sm text-slate-900">Notifications</span>
-                      {unreadCount > 0 && (
-                        <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-0.5 rounded-full font-semibold">
-                          {unreadCount} new
-                        </span>
-                      )}
-                    </div>
-                    {notifications.length > 0 && (
-                      <button
-                        onClick={() => setNotifications(notifications.map(n => ({ ...n, unread: false })))}
-                        className="text-xs font-semibold text-indigo-600 hover:underline cursor-pointer"
-                      >
-                        Mark all as read
-                      </button>
-                    )}
+                    <span className="font-bold text-sm text-slate-900">Notifications</span>
+                    <span className="text-xs text-indigo-600 font-semibold cursor-pointer" onClick={() => setNotifications(notifications.map(n => ({ ...n, unread: false })))}>
+                      Mark all read
+                    </span>
                   </div>
-
                   <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
                     {notifications.length > 0 ? (
                       notifications.map((item) => (
                         <div
                           key={item.id}
                           onClick={() => {
-                            setNotifications(notifications.map(n => n.id === item.id ? { ...n, unread: false } : n));
                             setShowNotifications(false);
                             setCurrentTab('assignments');
                           }}
-                          className={`p-3.5 hover:bg-slate-50 transition cursor-pointer flex items-start space-x-3 ${
-                            item.unread ? 'bg-indigo-50/50' : ''
-                          }`}
+                          className={`p-3.5 hover:bg-slate-50 transition cursor-pointer flex items-start space-x-3 ${item.unread ? 'bg-indigo-50/50' : ''}`}
                         >
-                          <div className={`p-2 rounded-xl mt-0.5 ${
-                            item.type === 'critical' ? 'bg-rose-100 text-rose-600' : 'bg-indigo-100 text-indigo-600'
-                          }`}>
+                          <div className={`p-2 rounded-xl mt-0.5 ${item.type === 'critical' ? 'bg-rose-100 text-rose-600' : 'bg-indigo-100 text-indigo-600'}`}>
                             <AlertTriangle className="w-4 h-4" />
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between">
-                              <p className="text-xs font-semibold text-slate-900 truncate">{item.title}</p>
-                              <span className="text-[10px] text-slate-400 shrink-0 font-medium">{item.time}</span>
+                              <p className="text-xs font-bold text-slate-900 truncate">{item.title}</p>
+                              <span className="text-[10px] text-slate-400 shrink-0 ml-2">{item.time}</span>
                             </div>
-                            <p className="text-xs text-slate-500 mt-0.5 line-clamp-2 font-normal">{item.message}</p>
+                            <p className="text-xs text-slate-600 mt-0.5 line-clamp-2">{item.message}</p>
                           </div>
                         </div>
                       ))
                     ) : (
-                      <div className="p-6 text-center text-xs text-slate-400 font-medium">No incident notifications</div>
+                      <div className="py-8 text-center text-sm text-slate-500">No notifications</div>
                     )}
                   </div>
                 </div>
               )}
             </div>
 
-            {/* PROFILE BUTTON IN TOP RIGHT */}
+            {/* USER PROFILE BUTTON */}
             <div className="relative">
               <button
                 onClick={() => {
-                  setShowProfileModal(true);
+                  setShowProfileModal(!showProfileModal);
                   setShowNotifications(false);
                 }}
-                className="flex items-center space-x-2 p-1.5 rounded-xl hover:bg-indigo-900/60 transition focus:outline-none cursor-pointer"
+                className="flex items-center space-x-3 pl-2 py-1.5 rounded-xl hover:bg-indigo-900/50 transition cursor-pointer"
               >
-                <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center font-bold text-white text-sm ring-2 ring-indigo-400/40 shadow-sm">
+                <div className="w-9 h-9 rounded-xl bg-indigo-600 font-bold text-white flex items-center justify-center text-sm shadow-md">
                   {initials}
                 </div>
-                <ChevronDown className="w-4 h-4 text-indigo-300 hidden sm:block" />
+                <div className="hidden xl:block text-left">
+                  <span className="block text-sm font-bold text-white truncate max-w-[130px]">{editableName}</span>
+                  <span className="block text-[11px] text-sky-300 truncate max-w-[130px]">Coordinator</span>
+                </div>
+                <ChevronDown className="w-4 h-4 text-indigo-300 hidden xl:block" />
               </button>
+
+              {showProfileModal && (
+                <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-2xl border border-indigo-200 py-3 z-50 text-slate-800">
+                  <div className="px-4 pb-3 border-b border-slate-100 text-center">
+                    <div className="w-14 h-14 rounded-2xl bg-indigo-600 text-white font-extrabold text-xl flex items-center justify-center mx-auto mb-2 shadow-lg shadow-indigo-600/30">
+                      {initials}
+                    </div>
+                    <p className="font-bold text-slate-900 text-base">{editableName}</p>
+                    <p className="text-xs text-indigo-600 font-medium mt-0.5">{editableRole}</p>
+                    <p className="text-xs text-slate-400 mt-1">{editableEmail}</p>
+                  </div>
+
+                  <div className="p-2 space-y-1">
+                    <button
+                      onClick={() => {
+                        setShowProfileModal(false);
+                        onLogout();
+                      }}
+                      className="w-full flex items-center space-x-2 px-3 py-2.5 rounded-xl text-sm font-semibold text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      <span>Sign Out</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </header>
 
-        {/* CONTENT AREA */}
-        <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+        {/* MAIN BODY CONTENT */}
+        <main className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
           {error && (
-            <div className="mb-6 bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 rounded-xl text-sm font-medium flex items-center justify-between">
-              <span>{error}</span>
-              <button onClick={() => setError('')} className="text-rose-500 hover:text-rose-700">
-                <X className="w-4 h-4" />
-              </button>
+            <div className="bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 rounded-2xl text-sm flex items-center justify-between shadow-sm">
+              <span className="font-medium">{error}</span>
+              <button onClick={() => setError('')} className="text-rose-400 hover:text-rose-700 font-bold ml-4">×</button>
             </div>
           )}
 
-          {/* TAB: DASHBOARD OVERVIEW */}
+          {/* DASHBOARD TAB */}
           {currentTab === 'dashboard' && (
             <div className="space-y-6">
-              {/* Stat Cards */}
+              {/* STATS OVERVIEW CARDS */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center space-x-4">
-                  <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
-                    <ShieldAlert className="w-6 h-6" />
-                  </div>
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between">
                   <div>
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Incidents</p>
-                    <p className="text-2xl font-extrabold text-slate-900">{incidents.length}</p>
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Pending Reports</p>
+                    <p className="text-3xl font-extrabold text-slate-900 mt-1">{pendingCount}</p>
                   </div>
-                </div>
-
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center space-x-4">
-                  <div className="p-3 bg-amber-100 text-amber-600 rounded-xl">
+                  <div className="p-3 bg-amber-50 text-amber-600 rounded-2xl">
                     <AlertTriangle className="w-6 h-6" />
                   </div>
+                </div>
+
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between">
                   <div>
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Pending / Active</p>
-                    <p className="text-2xl font-extrabold text-slate-900">{pendingCount + activeCount}</p>
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Incidents</p>
+                    <p className="text-3xl font-extrabold text-rose-600 mt-1">{activeCount}</p>
+                  </div>
+                  <div className="p-3 bg-rose-50 text-rose-600 rounded-2xl">
+                    <ShieldAlert className="w-6 h-6" />
                   </div>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center space-x-4">
-                  <div className="p-3 bg-blue-100 text-blue-600 rounded-xl">
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Assigned Cases</p>
+                    <p className="text-3xl font-extrabold text-indigo-600 mt-1">{assignedCount}</p>
+                  </div>
+                  <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl">
                     <ClipboardList className="w-6 h-6" />
                   </div>
-                  <div>
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Assigned Cases</p>
-                    <p className="text-2xl font-extrabold text-slate-900">{assignedCount}</p>
-                  </div>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center space-x-4">
-                  <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl">
-                    <CheckCircle className="w-6 h-6" />
-                  </div>
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between">
                   <div>
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Staff Status</p>
-                    <p className="text-sm font-bold capitalize text-emerald-700 mt-1 flex items-center space-x-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-ping" />
-                      <span>{availability}</span>
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Available Responders</p>
+                    <p className="text-3xl font-extrabold text-emerald-600 mt-1">
+                      {availableRespondersList.length} <span className="text-sm font-medium text-slate-400">/ {responders.length}</span>
                     </p>
                   </div>
+                  <div className="p-3 bg-emerald-50 text-emerald-600 rounded-2xl">
+                    <UserCheck className="w-6 h-6" />
+                  </div>
                 </div>
               </div>
 
-              {/* Quick Actions & Status Control */}
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
-                  <Activity className="w-5 h-5 text-indigo-600" />
-                  <span>Update Your Availability Status</span>
-                </h3>
-                <div className="flex flex-wrap gap-3">
-                  {['available', 'busy', 'on-leave', 'offline'].map((status) => (
-                    <button
-                      key={status}
-                      onClick={() => updateAvailability(status)}
-                      className={`px-4 py-2.5 rounded-xl text-xs font-bold capitalize transition-all cursor-pointer ${
-                        availability === status
-                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      {status}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* RECENT INCIDENT FEED & LOWER RIGHT ASSIGNED CASES GRID */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Recent Incident Feed (Takes 2 columns) */}
-                <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                  <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+              {/* TWO-COLUMN MAIN DASHBOARD SPLIT: LEFT (INCIDENTS), RIGHT (EARTHQUAKES) */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+                {/* LEFT: INCIDENT REPORT QUICK VIEW TABLE (2 COLUMNS WIDE, SCROLLABLE) */}
+                <div className="lg:col-span-2 bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 flex flex-col">
+                  <div className="flex items-center justify-between mb-4">
                     <div>
-                      <h3 className="text-base font-bold text-slate-900">Recent Incident Feed</h3>
-                      <p className="text-xs text-slate-500 mt-0.5">Prioritized incoming emergency reports</p>
+                      <h2 className="text-base font-bold text-slate-900">Incident Report</h2>
+                      <p className="text-xs text-slate-500">Latest distress calls and medical requests from campus</p>
                     </div>
                     <button
                       onClick={() => setCurrentTab('assignments')}
-                      className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center space-x-0.5 cursor-pointer"
+                      className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center space-x-1 cursor-pointer"
                     >
                       <span>View All</span>
                       <ChevronRight className="w-4 h-4" />
                     </button>
                   </div>
 
-                  {loading ? (
-                    <div className="py-12 text-center text-slate-400 font-medium text-sm">Loading incident reports...</div>
-                  ) : incidents.length > 0 ? (
-                    <div className="divide-y divide-slate-100 flex-1">
-                      {incidents.slice(0, 4).map((inc) => {
-                        const statusLower = (inc.status || 'pending').toLowerCase();
-                        let badgeBg = 'bg-amber-50 text-amber-700 border-amber-200';
-                        if (statusLower === 'active') badgeBg = 'bg-rose-50 text-rose-700 border-rose-200';
-                        else if (['assigned', 'accepted', 'responding'].includes(statusLower)) badgeBg = 'bg-indigo-50 text-indigo-700 border-indigo-200';
-                        else if (['resolved', 'completed'].includes(statusLower)) badgeBg = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                  <div className="overflow-x-auto overflow-y-auto max-h-[420px] pr-1">
+                    <table className="w-full text-left border-collapse text-sm">
+                      <thead className="sticky top-0 bg-white z-10">
+                        <tr className="border-b border-slate-100 text-xs text-slate-400 uppercase tracking-wider">
+                          <th className="py-3 px-4 font-bold">ID / Type</th>
+                          <th className="py-3 px-4 font-bold">Reporter</th>
+                          <th className="py-3 px-4 font-bold">Location</th>
+                          <th className="py-3 px-4 font-bold">Status</th>
+                          <th className="py-3 px-4 font-bold">Responder</th>
+                          <th className="py-3 px-4 font-bold text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {incidents.map((inc) => {
+                          const statusLower = (inc.status || 'pending').toLowerCase();
+                          return (
+                            <tr key={inc.incident_id} className="hover:bg-slate-50/80 transition">
+                              <td className="py-3.5 px-4">
+                                <span className="font-bold text-slate-900">#{inc.incident_id}</span>
+                                <span className="block text-xs text-indigo-600 font-semibold">{inc.incident_name}</span>
+                              </td>
+                              <td className="py-3.5 px-4 text-xs font-medium text-slate-700">{inc.reporter_name}</td>
+                              <td className="py-3.5 px-4 text-xs text-slate-600">{inc.location_description || 'Campus'}</td>
+                              <td className="py-3.5 px-4">
+                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-extrabold capitalize ${
+                                  statusLower === 'pending' ? 'bg-amber-100 text-amber-700' :
+                                  statusLower === 'active' || statusLower === 'critical' ? 'bg-rose-100 text-rose-700' :
+                                  ['assigned', 'accepted', 'responding'].includes(statusLower) ? 'bg-indigo-100 text-indigo-700' :
+                                  'bg-emerald-100 text-emerald-700'
+                                }`}>
+                                  {inc.status || 'Pending'}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-xs font-semibold text-slate-700">
+                                {inc.assigned_responder_name || <span className="text-slate-400 italic">Unassigned</span>}
+                              </td>
+                              <td className="py-3.5 px-4 text-right">
+                                <button
+                                  onClick={() => openManageModal(inc)}
+                                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl text-xs font-bold transition cursor-pointer"
+                                >
+                                  Manage
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {incidents.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="py-8 text-center text-sm text-slate-400">
+                              {loading ? 'Loading incidents...' : 'No incident reports found.'}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
 
-                        let formattedDate = '';
-                        if (inc.reported_at) {
-                          const d = new Date(inc.reported_at);
-                          const dateStr = d.toLocaleDateString();
-                          const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                          formattedDate = `${dateStr}, ${timeStr}`;
-                        }
+                {/* RIGHT: LIVE EARTHQUAKE MONITORING CARD (1 COLUMN WIDE, SCROLLABLE) */}
+                <div className="bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 flex flex-col">
+                  <div className="flex items-start justify-between gap-2 mb-4">
+                    <div className="flex items-center space-x-3">
+                      <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl shrink-0">
+                        <MapPin className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h2 className="text-base font-bold text-slate-900">Regional Earthquake Monitoring</h2>
+                        <p className="text-xs text-slate-500">Seismic activity near CDO</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => void loadEarthquakes()}
+                      disabled={loadingEarthquakes}
+                      className="text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-xl transition cursor-pointer shrink-0"
+                    >
+                      {loadingEarthquakes ? '...' : 'Refresh'}
+                    </button>
+                  </div>
 
-                        return (
-                          <div key={inc.incident_id} className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-50/60 transition">
-                            <div className="flex items-start space-x-4">
-                              <div className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-200/60 flex items-center justify-center text-amber-600 shrink-0 mt-0.5 shadow-sm">
-                                <ShieldAlert className="w-5 h-5" />
-                              </div>
-                              
-                              <div className="space-y-1">
-                                <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
-                                  <span className="text-sm font-extrabold text-slate-900">
-                                    #{inc.incident_id} {inc.incident_name}
-                                  </span>
-                                  <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase border ${badgeBg}`}>
-                                    {inc.status || 'pending'}
-                                  </span>
-                                </div>
-                                <p className="text-xs text-slate-600 flex items-center space-x-1">
-                                  <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                                  <span>{inc.location_description || 'Building 9, 3rd floor'}</span>
-                                </p>
-                                <p className="text-[11px] text-slate-400 flex items-center space-x-1">
-                                  <span>Reported by <strong className="text-slate-600 font-semibold">{inc.reporter_name}</strong></span>
-                                  {formattedDate && (
-                                    <>
-                                      <span>•</span>
-                                      <span>{formattedDate}</span>
-                                    </>
-                                  )}
-                                </p>
-                              </div>
-                            </div>
-
-                            <button
-                              onClick={() => setSelectedIncidentForUpdate(inc)}
-                              className="px-4 py-2 bg-[#4F46E5] hover:bg-[#4338CA] text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-md shadow-indigo-600/20 shrink-0 text-center"
-                            >
-                              Update
-                            </button>
+                  {loadingEarthquakes && earthquakes.length === 0 ? (
+                    <div className="py-8 text-center text-sm text-slate-400">Loading seismic activity...</div>
+                  ) : earthquakes.length > 0 ? (
+                    <div className="space-y-3 overflow-y-auto max-h-[420px] pr-1">
+                      {earthquakes.map((eq) => (
+                        <div
+                          key={eq.id}
+                          onClick={() => setSelectedEarthquakeForDetails(eq)}
+                          className="p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-300 hover:shadow-md transition cursor-pointer flex flex-col justify-between space-y-2 group"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className={`text-xs font-extrabold px-2.5 py-0.5 rounded-full ${eq.magnitude >= 5 ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                              Mag {eq.magnitude.toFixed(1)}
+                            </span>
+                            <span className="text-[11px] font-mono text-slate-400">{Math.round(eq.distance_from_cdo_km)} km from CDO</span>
                           </div>
-                        );
-                      })}
+                          <p className="text-xs font-bold text-slate-800 group-hover:text-indigo-600 transition-colors truncate">{eq.place}</p>
+                          <p className="text-[11px] text-slate-500">Depth: {eq.depth_km} km • {new Date(eq.time).toLocaleTimeString()}</p>
+                        </div>
+                      ))}
                     </div>
                   ) : (
-                    <div className="py-12 text-center text-slate-400 font-medium text-sm">No incidents reported yet.</div>
+                    <div className="py-8 text-center text-sm text-slate-500 bg-slate-50 rounded-2xl border border-slate-100">
+                      No recent significant seismic events reported in the region.
+                    </div>
                   )}
                 </div>
-
-                {/* Lower Right Assigned Cases Card */}
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
-                      <div className="flex items-center space-x-2">
-                        <div className="p-2 bg-blue-100 text-blue-600 rounded-xl">
-                          <ClipboardList className="w-4 h-4" />
-                        </div>
-                        <h3 className="text-base font-bold text-slate-900">Assigned Cases</h3>
-                      </div>
-                      <span className="text-xs font-bold bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full border border-blue-200">
-                        {assignedCount} active
-                      </span>
-                    </div>
-
-                    {acceptedIncidents.length > 0 ? (
-                      <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
-                        {acceptedIncidents.slice(0, 4).map((inc) => (
-                          <div key={inc.incident_id} className="p-3.5 rounded-xl border border-indigo-100 bg-indigo-50/50 hover:bg-indigo-50 transition space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-extrabold text-slate-900">#{inc.incident_id} {inc.incident_name}</span>
-                              <span className="text-[10px] uppercase px-2 py-0.5 rounded font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                                {inc.status}
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-slate-600 truncate">📍 {inc.location_description || 'Campus location'}</p>
-                            <div className="flex justify-end pt-1">
-                              <button
-                                onClick={() => setSelectedIncidentForUpdate(inc)}
-                                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold rounded-lg transition cursor-pointer shadow-sm"
-                              >
-                                Update Status
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="py-16 text-center text-slate-400 text-xs font-medium">
-                        No active assigned cases currently.
-                      </div>
-                    )}
-                  </div>
-
-                  <button
-                    onClick={() => setCurrentTab('accepted')}
-                    className="w-full mt-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer text-center"
-                  >
-                    View All Assigned Cases
-                  </button>
-                </div>
               </div>
             </div>
           )}
 
-          {/* TAB: INCIDENT REPORTS (ASSIGNMENTS) */}
+          {/* INCIDENT REPORTS TAB */}
           {currentTab === 'assignments' && (
-            <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
-                <div className="flex items-center space-x-2">
-                  <Filter className="w-4 h-4 text-slate-400" />
-                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Filter Status:</span>
-                  <select
-                    value={feedStatusFilter}
-                    onChange={(e) => setFeedStatusFilter(e.target.value as any)}
-                    className="text-xs bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                  >
-                    <option value="all">All Incidents ({incidents.length})</option>
-                    <option value="pending">Pending</option>
-                    <option value="active">Active</option>
-                    <option value="assigned">Assigned / Responding</option>
-                    <option value="resolved">Resolved</option>
-                  </select>
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 space-y-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">All Incident Reports</h2>
+                  <p className="text-xs text-slate-500">Filter, dispatch responders, and manage campus emergency cases</p>
                 </div>
-                <div className="text-xs text-slate-500 font-medium">
-                  Showing {prioritizedAndFilteredIncidents.length} results (Prioritized by urgency)
-                </div>
-              </div>
 
-              {loading ? (
-                <div className="py-16 text-center text-slate-400 font-medium">Loading reports...</div>
-              ) : prioritizedAndFilteredIncidents.length > 0 ? (
-                <div className="grid grid-cols-1 gap-4">
-                  {prioritizedAndFilteredIncidents.map((inc) => (
-                    <div key={inc.incident_id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                      <div className="space-y-1.5 flex-1">
-                        <div className="flex items-center space-x-3">
-                          <span className="text-sm font-extrabold text-slate-900">#{inc.incident_id} • {inc.incident_name}</span>
-                          <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase border ${
-                            (inc.status || 'pending').toLowerCase() === 'pending'
-                              ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
-                              : (inc.status || '').toLowerCase() === 'active'
-                              ? 'bg-rose-50 text-rose-700 border-rose-200'
-                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          }`}>
-                            {inc.status || 'pending'}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-600">📍 <strong>Location:</strong> {inc.location_description || 'Not specified'}</p>
-                        <p className="text-xs text-slate-600">👤 <strong>Reporter:</strong> {inc.reporter_name}</p>
-                        {inc.description && <p className="text-xs text-slate-500 italic bg-slate-50 p-2.5 rounded-xl border border-slate-100 mt-2">"{inc.description}"</p>}
-                      </div>
-
-                      <div className="flex items-center space-x-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
-                        <button
-                          onClick={() => setSelectedIncidentForUpdate(inc)}
-                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-sm shadow-indigo-600/20"
-                        >
-                          Update Status
-                        </button>
-                      </div>
-                    </div>
+                <div className="flex items-center space-x-2 overflow-x-auto pb-2 md:pb-0">
+                  {(['all', 'pending', 'active', 'assigned', 'resolved'] as const).map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setFeedStatusFilter(st)}
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold capitalize transition cursor-pointer shrink-0 ${
+                        feedStatusFilter === st
+                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {st}
+                    </button>
                   ))}
                 </div>
-              ) : (
-                <div className="bg-white p-16 rounded-2xl text-center border border-slate-200">
-                  <ShieldAlert className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                  <p className="text-slate-600 font-bold text-sm">No incident reports found</p>
-                  <p className="text-xs text-slate-400 mt-1">Try changing your status filter or search criteria.</p>
-                </div>
-              )}
-            </div>
-          )}
+              </div>
 
-          {/* TAB: ASSIGNED CASES */}
-          {currentTab === 'accepted' && (
-            <div className="space-y-6">
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                <h3 className="text-base font-bold text-slate-900 mb-4">Your Active Assigned Cases</h3>
-                {acceptedIncidents.length > 0 ? (
-                  <div className="space-y-3">
-                    {acceptedIncidents.map((inc) => (
-                      <div key={inc.incident_id} className="p-4 rounded-xl border border-indigo-100 bg-indigo-50/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div className="space-y-1">
-                          <span className="text-xs font-bold text-indigo-900">Case #{inc.incident_id}: {inc.incident_name}</span>
-                          <p className="text-xs text-slate-600">📍 {inc.location_description || 'Campus'} • Reported by {inc.reporter_name}</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {prioritizedAndFilteredIncidents.map((inc) => {
+                  const statusLower = (inc.status || 'pending').toLowerCase();
+                  return (
+                    <div key={inc.incident_id} className="bg-slate-50 rounded-2xl p-5 border border-slate-200/80 flex flex-col justify-between space-y-4 shadow-sm hover:shadow-md transition">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-extrabold text-slate-900 text-sm">Incident #{inc.incident_id}</span>
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-extrabold capitalize ${
+                            statusLower === 'pending' ? 'bg-amber-100 text-amber-700' :
+                            statusLower === 'active' || statusLower === 'critical' ? 'bg-rose-100 text-rose-700' :
+                            ['assigned', 'accepted', 'responding'].includes(statusLower) ? 'bg-indigo-100 text-indigo-700' :
+                            'bg-emerald-100 text-emerald-700'
+                          }`}>
+                            {inc.status || 'Pending'}
+                          </span>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <button
-                            onClick={() => setSelectedIncidentForUpdate(inc)}
-                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition cursor-pointer"
-                          >
-                            Update Status
-                          </button>
+
+                        <p className="text-sm font-bold text-indigo-600">{inc.incident_name}</p>
+                        <p className="text-xs text-slate-600">{inc.description || 'No detailed description provided.'}</p>
+                        
+                        <div className="pt-2 border-t border-slate-200/60 space-y-1 text-xs text-slate-500">
+                          <p><strong className="text-slate-700">Reporter:</strong> {inc.reporter_name}</p>
+                          <p><strong className="text-slate-700">Location:</strong> {inc.location_description || 'Campus Area'}</p>
+                          <p><strong className="text-slate-700">Assigned:</strong> {inc.assigned_responder_name || <span className="text-slate-400 italic">None</span>}</p>
                         </div>
                       </div>
-                    ))}
+
+                      <button
+                        onClick={() => openManageModal(inc)}
+                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
+                      >
+                        Manage & Dispatch
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {prioritizedAndFilteredIncidents.length === 0 && (
+                  <div className="col-span-full py-12 text-center text-slate-400 text-sm">
+                    No incident reports match your filter criteria.
                   </div>
-                ) : (
-                  <div className="py-12 text-center text-slate-400 text-xs font-medium">No active assigned cases currently.</div>
                 )}
               </div>
             </div>
           )}
 
-          {/* TAB: SCHEDULE */}
+          {/* ASSIGNED CASES TAB */}
+          {currentTab === 'accepted' && (
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 space-y-6">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Active & Assigned Cases</h2>
+                <p className="text-xs text-slate-500">Monitor ongoing medical dispatches and active responder deployments</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {acceptedIncidents.map((inc) => (
+                  <div key={inc.incident_id} className="bg-slate-50 rounded-2xl p-5 border border-indigo-100 flex flex-col justify-between space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-extrabold text-slate-900 text-sm">Case #{inc.incident_id}</span>
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-indigo-100 text-indigo-700 capitalize">
+                          {inc.status || 'Assigned'}
+                        </span>
+                      </div>
+                      <p className="text-sm font-bold text-indigo-600">{inc.incident_name}</p>
+                      <p className="text-xs text-slate-600">{inc.location_description || 'Campus'}</p>
+                      <div className="text-xs text-slate-500 pt-2 border-t border-slate-200">
+                        <p><strong className="text-slate-700">Responder:</strong> {inc.assigned_responder_name || 'Assigned'}</p>
+                        <p><strong className="text-slate-700">Reporter:</strong> {inc.reporter_name}</p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => openManageModal(inc)}
+                      className="w-full py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold transition cursor-pointer"
+                    >
+                      Update Case Status
+                    </button>
+                  </div>
+                ))}
+
+                {acceptedIncidents.length === 0 && (
+                  <div className="col-span-full py-12 text-center text-slate-400 text-sm">
+                    No active or assigned cases currently in progress.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* STAFF ROSTER TAB */}
+          {currentTab === 'roster' && (
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 space-y-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">Clinic Staff & Responder Roster</h2>
+                  <p className="text-xs text-slate-500">Manage medical personnel availability and contact directory</p>
+                </div>
+
+                <div className="flex items-center space-x-2 overflow-x-auto pb-2 md:pb-0">
+                  {(['all', 'available', 'busy', 'offline'] as const).map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setRosterFilter(st)}
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold capitalize transition cursor-pointer shrink-0 ${
+                        rosterFilter === st
+                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredResponders.map((resp) => {
+                  const rid = resp.responder_id ?? resp.id;
+                  const status = (resp.availability_status || 'offline').toLowerCase();
+                  return (
+                    <div key={rid} className="bg-slate-50 rounded-2xl p-5 border border-slate-200/80 flex flex-col justify-between space-y-4">
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center text-sm">
+                            {resp.name.split(/\s+/).map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                          </div>
+                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold capitalize ${
+                            status === 'available' ? 'bg-emerald-100 text-emerald-700' :
+                            status === 'busy' ? 'bg-amber-100 text-amber-700' :
+                            'bg-slate-200 text-slate-600'
+                          }`}>
+                            {resp.availability_status || 'Offline'}
+                          </span>
+                        </div>
+
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{resp.name}</p>
+                          <p className="text-xs text-indigo-600 font-semibold">{resp.user_type || 'Medical Responder'}</p>
+                        </div>
+
+                        <div className="space-y-1 text-xs text-slate-500 pt-2 border-t border-slate-200/60">
+                          <p className="flex items-center space-x-2">
+                            <Phone className="w-3.5 h-3.5 text-slate-400" />
+                            <span>{resp.contact_number || 'No phone listed'}</span>
+                          </p>
+                          <p className="flex items-center space-x-2">
+                            <Mail className="w-3.5 h-3.5 text-slate-400" />
+                            <span>{resp.email || 'No email listed'}</span>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => updateResponderAvailability(resp, status === 'available' ? 'offline' : 'available')}
+                          className={`flex-1 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            status === 'available'
+                              ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                              : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                          }`}
+                        >
+                          Set {status === 'available' ? 'Offline' : 'Available'}
+                        </button>
+                        <button
+                          onClick={() => setSelectedResponderForDetails(resp)}
+                          className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl text-xs font-bold transition cursor-pointer"
+                        >
+                          View
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {filteredResponders.length === 0 && (
+                  <div className="col-span-full py-12 text-center text-slate-400 text-sm">
+                    No staff members match the selected filter.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* SCHEDULE TAB */}
           {currentTab === 'schedule' && (
-            <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center space-y-3">
-              <CalendarDays className="w-12 h-12 text-indigo-600 mx-auto" />
-              <h3 className="text-lg font-bold text-slate-900">Clinic Staff Duty Schedule</h3>
-              <p className="text-xs text-slate-500 max-w-md mx-auto">
-                Your duty roster and shift schedules are synchronized with the University Medical Center portal.
-              </p>
-              <div className="inline-block mt-4 px-4 py-2 bg-indigo-50 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200">
-                Current Shift: Mon - Fri (08:00 AM - 05:00 PM)
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 space-y-6">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Clinic Shift Schedule</h2>
+                <p className="text-xs text-slate-500">Upcoming medical staff duty rosters and shift assignments</p>
+              </div>
+
+              <div className="py-16 text-center space-y-3 bg-slate-50 rounded-2xl border border-slate-100">
+                <CalendarDays className="w-12 h-12 text-indigo-400 mx-auto" />
+                <p className="text-sm font-bold text-slate-700">Weekly Shift Calendar</p>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                  Staff shift rotations and coordinator schedules are synchronized with the university HR portal.
+                </p>
               </div>
             </div>
           )}
         </main>
       </div>
 
-      {/* CENTERED PROFILE MODAL CARD */}
-      {showProfileModal && (
-        <div className="fixed inset-0 bg-[#151130]/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-slate-200 overflow-hidden p-6 space-y-5 text-slate-800">
-            {/* Header */}
+      {/* MODAL: MANAGE & DISPATCH INCIDENT */}
+      {selectedIncidentForUpdate && (
+        <div className="fixed inset-0 bg-[#151130]/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-indigo-100 space-y-6 text-slate-800">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
-                <h3 className="text-lg font-extrabold text-slate-950">Staff Profile</h3>
-                <p className="text-xs text-slate-500 mt-0.5">View your profile details and account actions</p>
+                <h3 className="text-base font-bold text-slate-900">Manage Incident #{selectedIncidentForUpdate.incident_id}</h3>
+                <p className="text-xs text-slate-500">{selectedIncidentForUpdate.incident_name}</p>
               </div>
               <button
-                onClick={() => {
-                  setShowProfileModal(false);
-                  setIsEditingProfile(false);
-                }}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-800 transition cursor-pointer"
+                onClick={() => setSelectedIncidentForUpdate(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Profile Avatar Card */}
-            <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/50 flex items-center space-x-4">
-              <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center font-bold text-white text-base shadow-md shadow-indigo-600/30">
-                {initials}
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Update Incident Status</label>
+                <select
+                  id="incident-status-select"
+                  defaultValue={selectedIncidentForUpdate.status || 'pending'}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                >
+                  <option value="pending">Pending</option>
+                  <option value="active">Active</option>
+                  <option value="assigned">Assigned</option>
+                  <option value="responding">Responding</option>
+                  <option value="resolved">Resolved</option>
+                </select>
               </div>
-              <div className="min-w-0">
-                <p className="text-sm font-extrabold text-slate-900 truncate">{editableName}</p>
-                <p className="text-xs text-indigo-600 font-semibold truncate">{editableRole}</p>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Assign Medical Responder</label>
+                <select
+                  value={selectedResponderIdForModal}
+                  onChange={(e) => setSelectedResponderIdForModal(Number(e.target.value))}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                >
+                  <option value={0}>-- Select Responder --</option>
+                  {responders.map((resp) => {
+                    const rid = resp.responder_id ?? resp.id;
+                    return (
+                      <option key={rid} value={rid}>
+                        {resp.name} ({resp.availability_status || 'offline'})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-100 text-xs text-indigo-900 space-y-1">
+                <p><strong>Location:</strong> {selectedIncidentForUpdate.location_description || 'Campus Area'}</p>
+                <p><strong>Reporter:</strong> {selectedIncidentForUpdate.reporter_name}</p>
               </div>
             </div>
 
-            {/* Contact Details Card */}
-            <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-2.5">
-              <p className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider">Contact Details</p>
-              <div className="flex items-center space-x-2.5 text-xs text-slate-600 font-medium">
-                <Mail className="w-4 h-4 text-slate-400 shrink-0" />
-                <span className="truncate">{editableEmail}</span>
-              </div>
-              <div className="flex items-center space-x-2.5 text-xs text-slate-600 font-medium">
-                <Phone className="w-4 h-4 text-slate-400 shrink-0" />
-                <span>{editablePhone}</span>
-              </div>
-            </div>
-
-            {/* Editable Profile Section or Action Triggers */}
-            {isEditingProfile ? (
-              <div className="p-4 rounded-2xl border border-indigo-200 bg-indigo-50/40 space-y-3">
-                <p className="text-xs font-bold text-indigo-900">Edit Profile Information</p>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase">Staff Name</label>
-                  <input
-                    type="text"
-                    value={editableName}
-                    onChange={(e) => setEditableName(e.target.value)}
-                    className="w-full mt-1 text-xs px-3 py-2 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-medium"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase">Role / Title</label>
-                  <input
-                    type="text"
-                    value={editableRole}
-                    onChange={(e) => setEditableRole(e.target.value)}
-                    className="w-full mt-1 text-xs px-3 py-2 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-medium"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase">Email Address</label>
-                  <input
-                    type="email"
-                    value={editableEmail}
-                    onChange={(e) => setEditableEmail(e.target.value)}
-                    className="w-full mt-1 text-xs px-3 py-2 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-medium"
-                  />
-                </div>
-                <div className="flex space-x-2 pt-1">
-                  <button
-                    onClick={() => setIsEditingProfile(false)}
-                    className="flex-1 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => setIsEditingProfile(false)}
-                    className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1 shadow-sm cursor-pointer"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    <span>Save</span>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <button
-                  onClick={() => setIsEditingProfile(true)}
-                  className="w-full p-3.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 transition flex items-center justify-between cursor-pointer group shadow-sm"
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600 group-hover:bg-indigo-100 transition">
-                      <Edit3 className="w-4 h-4" />
-                    </div>
-                    <span className="text-xs font-bold text-slate-900">Update Profile Details</span>
-                  </div>
-                  <span className="text-xs text-indigo-600 font-bold">Edit</span>
-                </button>
-
-                <button
-                  onClick={() => alert('Password update requested. Check your email for instructions.')}
-                  className="w-full p-3.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 transition flex items-center justify-between cursor-pointer group shadow-sm"
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600 group-hover:bg-indigo-100 transition">
-                      <Lock className="w-4 h-4" />
-                    </div>
-                    <span className="text-xs font-bold text-slate-900">Update Password</span>
-                  </div>
-                  <span className="text-xs text-indigo-600 font-bold">Secure</span>
-                </button>
-              </div>
-            )}
-
-            {/* Sign Out Action Card */}
-            <div className="pt-2">
+            <div className="flex items-center justify-end space-x-3 pt-4 border-t border-slate-100">
               <button
-                onClick={onLogout}
-                className="w-full p-3.5 rounded-2xl border border-rose-200 bg-rose-50/50 hover:bg-rose-100 transition flex items-center justify-between cursor-pointer group"
+                onClick={() => setSelectedIncidentForUpdate(null)}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 transition cursor-pointer"
               >
-                <div className="flex items-center space-x-3">
-                  <div className="p-2 rounded-xl bg-rose-100 text-rose-600 group-hover:bg-rose-200 transition">
-                    <LogOut className="w-4 h-4" />
-                  </div>
-                  <span className="text-xs font-bold text-rose-700">Sign Out</span>
-                </div>
-                <span className="text-xs text-rose-600 font-bold">Exit</span>
+                Cancel
+              </button>
+              <button
+                disabled={submittingAssignment}
+                onClick={() => {
+                  const statusSelect = document.getElementById('incident-status-select') as HTMLSelectElement;
+                  const newStatus = statusSelect ? statusSelect.value : (selectedIncidentForUpdate.status || 'pending');
+                  void handleSaveIncidentAssignment(selectedIncidentForUpdate, newStatus, selectedResponderIdForModal);
+                }}
+                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition shadow-md shadow-indigo-600/30 cursor-pointer disabled:opacity-50"
+              >
+                {submittingAssignment ? 'Saving...' : 'Save & Dispatch'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* UPDATE STATUS MODAL */}
-      {selectedIncidentForUpdate && (
-        <div className="fixed inset-0 bg-[#151130]/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden p-6 space-y-5">
+      {/* MODAL: RESPONDER DETAILS */}
+      {selectedResponderForDetails && (
+        <div className="fixed inset-0 bg-[#151130]/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-indigo-100 space-y-6 text-slate-800">
+            <div className="text-center space-y-2">
+              <div className="w-16 h-16 rounded-2xl bg-indigo-600 text-white font-extrabold text-xl flex items-center justify-center mx-auto shadow-lg shadow-indigo-600/30">
+                {selectedResponderForDetails.name.split(/\s+/).map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+              </div>
+              <h3 className="text-base font-bold text-slate-900">{selectedResponderForDetails.name}</h3>
+              <p className="text-xs text-indigo-600 font-semibold">{selectedResponderForDetails.user_type || 'Medical Responder'}</p>
+            </div>
+
+            <div className="space-y-2 text-xs text-slate-600 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+              <p><strong className="text-slate-800">Status:</strong> <span className="capitalize">{selectedResponderForDetails.availability_status}</span></p>
+              <p><strong className="text-slate-800">Phone:</strong> {selectedResponderForDetails.contact_number || 'N/A'}</p>
+              <p><strong className="text-slate-800">Email:</strong> {selectedResponderForDetails.email || 'N/A'}</p>
+            </div>
+
+            <button
+              onClick={() => setSelectedResponderForDetails(null)}
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EARTHQUAKE DETAILS */}
+      {selectedEarthquakeForDetails && (
+        <div className="fixed inset-0 bg-[#151130]/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-indigo-100 space-y-6 text-slate-800">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h3 className="text-base font-extrabold text-slate-950">Update Incident Status</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Incident #{selectedIncidentForUpdate?.incident_id} • {selectedIncidentForUpdate?.incident_name}</p>
+              <div className="flex items-center space-x-3">
+                <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl">
+                  <MapPin className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Earthquake Details</h3>
+                  <p className="text-xs text-slate-500">Seismic Event Report</p>
+                </div>
               </div>
               <button
-                onClick={() => setSelectedIncidentForUpdate(null)}
-                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition"
+                onClick={() => setSelectedEarthquakeForDetails(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">Select New Status</label>
-              
-              <div className="space-y-1.5">
-                {[
-                  { key: 'pending', label: 'Pending', desc: 'Awaiting review or triage' },
-                  { key: 'active', label: 'Active', desc: 'Currently being handled' },
-                  { key: 'assigned', label: 'Assigned', desc: 'Responder en route / assigned' },
-                  { key: 'resolved', label: 'Resolved', desc: 'Case closed and completed' },
-                ].map((st) => {
-                  const currentStatus = (selectedIncidentForUpdate?.status || 'pending').toLowerCase();
-                  const isSelected = currentStatus === st.key;
-
-                  return (
-                    <button
-                      key={st.key}
-                      onClick={() => updateIncidentStatus(selectedIncidentForUpdate!.incident_id, st.key)}
-                      className={`w-full text-left p-3.5 rounded-xl border transition flex items-center justify-between cursor-pointer ${
-                        isSelected
-                          ? 'bg-indigo-50 border-indigo-300 shadow-sm'
-                          : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      <div>
-                        <p className={`text-xs font-extrabold uppercase ${isSelected ? 'text-indigo-900' : 'text-slate-900'}`}>
-                          {st.label}
-                        </p>
-                        <p className="text-[11px] text-slate-500 mt-0.5">{st.desc}</p>
-                      </div>
-                      {isSelected && (
-                        <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0">
-                          <Check className="w-3 h-3" />
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider font-bold text-slate-400">Magnitude</p>
+                  <p className={`text-2xl font-extrabold mt-0.5 ${selectedEarthquakeForDetails.magnitude >= 5 ? 'text-rose-600' : 'text-amber-600'}`}>
+                    {selectedEarthquakeForDetails.magnitude.toFixed(1)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] uppercase tracking-wider font-bold text-slate-400">Distance from CDO</p>
+                  <p className="text-lg font-extrabold text-slate-900 mt-0.5">{Math.round(selectedEarthquakeForDetails.distance_from_cdo_km)} km</p>
+                </div>
               </div>
+
+              <div className="space-y-2 text-xs text-slate-700 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                <p><strong className="text-slate-900">Location / Place:</strong> {selectedEarthquakeForDetails.place}</p>
+                <p><strong className="text-slate-900">Focal Depth:</strong> {selectedEarthquakeForDetails.depth_km} km</p>
+                <p><strong className="text-slate-900">Timestamp:</strong> {new Date(selectedEarthquakeForDetails.time).toLocaleString()}</p>
+                <p><strong className="text-slate-900">Data Source:</strong> {selectedEarthquakeForDetails.source || 'USGS / PHIVOLCS Feed'}</p>
+              </div>
+
+              {selectedEarthquakeForDetails.url && (
+                <a
+                  href={selectedEarthquakeForDetails.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center space-x-2 w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold transition"
+                >
+                  <span>View Official Event Page</span>
+                  <ExternalLink className="w-4 h-4" />
+                </a>
+              )}
             </div>
 
-            <div className="pt-2 flex justify-end">
-              <button
-                onClick={() => setSelectedIncidentForUpdate(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
-              >
-                Cancel
-              </button>
-            </div>
+            <button
+              onClick={() => setSelectedEarthquakeForDetails(null)}
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+            >
+              Close
+            </button>
           </div>
         </div>
       )}

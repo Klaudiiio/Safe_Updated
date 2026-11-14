@@ -26,7 +26,7 @@ export interface ProfileSyncResult {
 export interface ProfileUpdatePayload {
   name: string;
   username: string;
-  email?: string; // <-- Added optional email property
+  email?: string;
   student_id: string;
   course: string;
   phone_number: string;
@@ -70,6 +70,17 @@ export interface SensorDataResponse {
 export interface IncidentTypeRecord {
   incident_types_id: number;
   incident_name: string;
+}
+
+export interface EarthquakeEvent {
+  id: string;
+  magnitude: number;
+  place: string;
+  time: number;
+  url: string;
+  depth_km: number;
+  distance_from_cdo_km: number;
+  source: string;
 }
 
 interface ApiErrorBody {
@@ -321,6 +332,45 @@ export async function fetchUserIncidentsWithSession(
   }
 }
 
+export async function fetchEarthquakes(accessToken: string): Promise<EarthquakeEvent[]> {
+  if (!API_BASE_URL) {
+    throw new Error('Django API address is not set. Check EXPO_PUBLIC_API_URL.');
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/auth/earthquakes/`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  } catch {
+    throw new Error('Could not reach Django to fetch regional earthquake data. Check your network connection.');
+  }
+
+  const body = await responseBody(response) as (ApiErrorBody & { events?: EarthquakeEvent[] }) | null;
+  if (!response.ok) {
+    throw new Error(readableError(body, `Failed to fetch earthquake feed (${response.status}).`));
+  }
+
+  return Array.isArray(body?.events) ? body.events : [];
+}
+
+export async function fetchEarthquakesWithSession(
+  session: AuthSession,
+): Promise<{ events: EarthquakeEvent[]; session: AuthSession }> {
+  try {
+    const events = await fetchEarthquakes(session.access);
+    return { events, session };
+  } catch (error) {
+    if (error instanceof Error && (error.message.includes('401') || error.message.includes('Unauthorized'))) {
+      const refreshedSession = await refreshSupabaseSession(session);
+      const events = await fetchEarthquakes(refreshedSession.access);
+      return { events, session: refreshedSession };
+    }
+    throw error;
+  }
+}
+
 async function submitIncidentReportWithToken(
   session: AuthSession,
   payload: IncidentReportPayload,
@@ -345,14 +395,14 @@ async function submitIncidentReportWithToken(
   const typeUrl = `${SUPABASE_URL}/rest/v1/incident_types?select=incident_types_id,incident_name`;
   const typeResponse = await request(typeUrl);
   const typeBody = await responseBody(typeResponse);
- 
+
   if (!typeResponse.ok) {
     throw new SupabaseRestError(
       readableError(typeBody as ApiErrorBody | null, `Supabase incident type lookup failed (${typeResponse.status}).`),
       typeResponse.status,
     );
   }
- 
+
   const types = typeBody as Array<{ incident_types_id?: number; incident_name?: string }> | null;
   const matchedType = types?.find(
     (t) => t.incident_name?.trim().toLowerCase() === payload.incident_type.trim().toLowerCase()

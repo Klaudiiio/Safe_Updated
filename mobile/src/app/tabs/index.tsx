@@ -9,6 +9,7 @@ import {
   FlatList,
   TextInput,
   Alert,
+  Linking,
 } from 'react-native';
 import {
   ShieldAlert,
@@ -31,11 +32,17 @@ import {
   FileText,
   Send,
   Navigation,
+  ExternalLink,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../auth/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
-import { fetchLatestSensorData, fetchIncidentTypes } from '../../lib/api';
+import {
+  fetchLatestSensorData,
+  fetchIncidentTypes,
+  fetchEarthquakesWithSession,
+  EarthquakeEvent,
+} from '../../lib/api';
 
 interface IncidentType {
   id: string;
@@ -55,13 +62,17 @@ const commonIncidentsGrid = [
 ];
 
 export default function HomeScreen() {
-  const { submitIncidentReport } = useAuth();
+  const { session, submitIncidentReport } = useAuth();
   const { isDark } = useTheme();
 
   const [now, setNow] = useState(() => new Date());
   const [currentSeconds, setCurrentSeconds] = useState('00');
   const [temperature, setTemperature] = useState<number | null>(null);
   const [sensorLoading, setSensorLoading] = useState(true);
+
+  // Earthquake feed state
+  const [earthquakes, setEarthquakes] = useState<EarthquakeEvent[]>([]);
+  const [dismissedQuakeIds, setDismissedQuakeIds] = useState<string[]>([]);
 
   const [dropdownIncidents, setDropdownIncidents] = useState<IncidentType[]>([]);
   const [selectedIncident, setSelectedIncident] = useState<IncidentType | null>(null);
@@ -123,8 +134,19 @@ export default function HomeScreen() {
       }
     };
 
+    const loadEarthquakeFeed = async () => {
+      if (!session) return;
+      try {
+        const res = await fetchEarthquakesWithSession(session);
+        setEarthquakes(res.events);
+      } catch (err) {
+        console.error('Failed to load earthquake feed:', err);
+      }
+    };
+
     loadSensorTemperature();
     loadAllIncidentTypes();
+    loadEarthquakeFeed();
 
     const sensorInterval = setInterval(loadSensorTemperature, 10000);
 
@@ -132,7 +154,21 @@ export default function HomeScreen() {
       clearInterval(timer);
       clearInterval(sensorInterval);
     };
-  }, []);
+  }, [session]);
+
+  // Filter for active earthquakes happening within the last 24 hours matching criteria, not dismissed
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  const currentTime = new Date().getTime();
+
+  const activeEarthquakeAlerts = earthquakes.filter((eq) => {
+    const isWithin24Hours = currentTime - eq.time <= ONE_DAY_MS;
+    const meetsCriteria = eq.magnitude >= 4.0 || eq.distance_from_cdo_km <= 300;
+    const notDismissed = !dismissedQuakeIds.includes(eq.id);
+
+    return isWithin24Hours && meetsCriteria && notDismissed;
+  });
+
+  const latestAlert = activeEarthquakeAlerts.length > 0 ? activeEarthquakeAlerts[0] : null;
 
   const handleImmediateEmergencyReport = async () => {
     if (submitting) return;
@@ -217,6 +253,40 @@ export default function HomeScreen() {
             <TouchableOpacity onPress={() => setToastMessage(null)}>
               <X size={16} color="#64748B" />
             </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Earthquake Alert Banner - Rendered ONLY if an active seismic event is happening within 24 hours */}
+        {latestAlert && (
+          <View style={styles.quakeBanner}>
+            <View style={styles.quakeBannerHeader}>
+              <View style={styles.quakeIconWrapper}>
+                <AlertTriangle size={18} color="#D97706" />
+              </View>
+              <View style={styles.quakeTitleGroup}>
+                <Text style={styles.quakeBannerTitle}>
+                  Seismic Alert (Mag {latestAlert.magnitude.toFixed(1)})
+                </Text>
+                <Text style={styles.quakeBannerSub} numberOfLines={2}>
+                  {latestAlert.place} — {latestAlert.distance_from_cdo_km} km from CDO (Depth: {latestAlert.depth_km} km)
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setDismissedQuakeIds((prev) => [...prev, latestAlert.id])}
+                style={styles.quakeDismissBtn}
+              >
+                <X size={16} color="#D97706" />
+              </TouchableOpacity>
+            </View>
+            {latestAlert.url ? (
+              <TouchableOpacity
+                style={styles.quakeLinkBtn}
+                onPress={() => Linking.openURL(latestAlert.url)}
+              >
+                <Text style={styles.quakeLinkText}>View USGS / PHIVOLCS Report</Text>
+                <ExternalLink size={12} color="#B45309" />
+              </TouchableOpacity>
+            ) : null}
           </View>
         )}
 
@@ -487,7 +557,57 @@ const styles = StyleSheet.create({
     gap: 10, backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 6, elevation: 4
   },
   toastText: { fontSize: 13, fontWeight: '600', flex: 1, color: '#1E293B' },
- 
+
+  quakeBanner: {
+    backgroundColor: '#FEF3C7',
+    borderLeftWidth: 4,
+    borderLeftColor: '#D97706',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  quakeBannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  quakeIconWrapper: {
+    padding: 4,
+  },
+  quakeTitleGroup: {
+    flex: 1,
+  },
+  quakeBannerTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#92400E',
+    textTransform: 'uppercase',
+  },
+  quakeBannerSub: {
+    fontSize: 11,
+    color: '#78350F',
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  quakeDismissBtn: {
+    padding: 4,
+  },
+  quakeLinkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 8,
+    alignSelf: 'flex-start',
+  },
+  quakeLinkText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#B45309',
+    textDecorationLine: 'underline',
+  },
+
   metricsRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
   metricCard: {
     flex: 1, borderRadius: 14, borderWidth: 1, borderColor: '#BAE6FD',
@@ -498,10 +618,10 @@ const styles = StyleSheet.create({
   metricValueBox: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   metricValueText: { fontSize: 15, fontWeight: '800', color: '#1E293B' },
   secondsText: { color: '#0284C7', fontSize: 11, fontWeight: '700' },
- 
+
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 12 },
   sectionTitle: { fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, color: '#334155' },
- 
+
   gridContainer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8, marginBottom: 16 },
   gridCard: {
     width: '31.5%', borderWidth: 1, borderColor: '#BAE6FD', borderRadius: 12,
@@ -512,7 +632,7 @@ const styles = StyleSheet.create({
   gridCardSelected: { backgroundColor: '#E0F2FE', borderColor: '#0284C7' },
   gridIconBox: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: 6, backgroundColor: '#F0F6FF' },
   gridCardText: { fontSize: 11, fontWeight: '600', textAlign: 'center', color: '#1E293B' },
- 
+
   dropdownButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     borderWidth: 1, borderColor: '#BAE6FD', borderRadius: 12, paddingVertical: 14, paddingHorizontal: 16,
@@ -520,7 +640,7 @@ const styles = StyleSheet.create({
     shadowColor: '#BAE6FD', shadowOpacity: 0.15, shadowRadius: 3, elevation: 1
   },
   dropdownButtonText: { fontSize: 13, fontWeight: '600', color: '#1E293B' },
- 
+
   emergencyButtonWrapper: { alignItems: 'center', justifyContent: 'center', marginVertical: 10 },
   emergencyButton: {
     width: 200, height: 200, borderRadius: 100, backgroundColor: '#dc2626',
@@ -529,7 +649,7 @@ const styles = StyleSheet.create({
   },
   emergencyButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '900', textAlign: 'center', letterSpacing: 0.5, marginTop: 4 },
   buttonDisabled: { opacity: 0.6 },
- 
+
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   modalContent: { width: '100%', borderRadius: 20, padding: 20, maxHeight: '60%', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#BAE6FD' },
   formModalContent: { width: '100%', borderRadius: 20, padding: 20, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#BAE6FD' },
@@ -537,7 +657,7 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 16, fontWeight: 'bold', color: '#1E293B' },
   modalItem: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
   modalItemTitle: { fontSize: 14, fontWeight: '600', color: '#1E293B' },
- 
+
   inputGroup: { marginBottom: 16 },
   inputLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
   inputLabel: { fontSize: 12, fontWeight: '600', color: '#334155' },

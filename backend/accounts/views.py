@@ -1,3 +1,4 @@
+import math
 import logging
 import random
 import time
@@ -8,6 +9,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
 from django.core.mail import send_mail
 from django.core.cache import cache
+from django.http import JsonResponse
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -28,6 +30,83 @@ logger = logging.getLogger(__name__)
 # Cache-backed secure OTP constants (10 mins expiration, max 5 attempts)
 OTP_EXPIRY_SECONDS = 600
 MAX_ATTEMPTS = 5
+
+# Cagayan de Oro coordinates & radius configuration for USGS earthquake feed
+CDO_LAT = 8.4542
+CDO_LON = 124.6319
+
+
+def calculate_distance(lat1, lon1, lat2, lon2):
+    """Calculate distance in kilometers using the Haversine formula."""
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+         math.sin(dlon / 2) ** 2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return round(R * c, 1)
+
+
+class EarthquakeFeedAPI(APIView):
+    """
+    Proxy endpoint to fetch earthquake events from the USGS GeoJSON feed,
+    calculate distance from Cagayan de Oro, cache briefly, and return clean JSON.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        cache_key = 'usgs_cdo_earthquakes'
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return JsonResponse(cached_data, safe=False)
+
+        usgs_url = (
+            "https://earthquake.usgs.gov/fdsnws/event/1/query?"
+            f"format=geojson&latitude={CDO_LAT}&longitude={CDO_LON}&maxradiuskm=300&orderby=time"
+        )
+
+        try:
+            response = requests.get(usgs_url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            events = []
+            for feature in data.get('features', []):
+                props = feature.get('properties', {})
+                geom = feature.get('geometry', {})
+                coords = geom.get('coordinates', [0, 0, 0])  # [lon, lat, depth]
+
+                eq_lon, eq_lat, depth = coords[0], coords[1], coords[2]
+                distance = calculate_distance(CDO_LAT, CDO_LON, eq_lat, eq_lon)
+
+                events.append({
+                    'id': feature.get('id'),
+                    'magnitude': props.get('mag'),
+                    'place': props.get('place'),
+                    'time': props.get('time'),  # Epoch milliseconds
+                    'url': props.get('url'),
+                    'detail_url': props.get('detail'),
+                    'latitude': eq_lat,
+                    'longitude': eq_lon,
+                    'depth_km': depth,
+                    'distance_from_cdo_km': distance,
+                    'source': 'USGS Earthquake Catalog'
+                })
+
+            payload = {
+                'center': {'latitude': CDO_LAT, 'longitude': CDO_LON},
+                'radius_km': 300,
+                'events': events,
+                'phivolcs_reference_url': 'https://www.phivolcs.dost.gov.ph/'
+            }
+
+            cache.set(cache_key, payload, 300)  # Cache for 5 minutes
+            return JsonResponse(payload)
+
+        except requests.RequestException as e:
+            logger.error(f"USGS Earthquake feed fetch error: {str(e)}")
+            return Response({'error': 'Failed to fetch earthquake data from USGS.', 'details': str(e)}, status=502)
 
 
 class LoginView(TokenObtainPairView):
