@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { AlertCircle, Filter } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -10,6 +11,9 @@ import { updateIncidentStatus } from '../api';
 import { mapDbStatusToUi } from '../data/liveData';
 
 export function ActiveIncidents() {
+  const [searchParams] = useSearchParams();
+  const highlightedIncidentId = searchParams.get('incident');
+
   const adminData = useAdminData() as any;
   const { incidents, loading, error } = adminData;
  
@@ -20,6 +24,16 @@ export function ActiveIncidents() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [buildingFilter, setBuildingFilter] = useState('all');
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  // Scroll to and center the highlighted incident card if an incident query param is present
+  useEffect(() => {
+    if (highlightedIncidentId) {
+      const element = document.getElementById(`incident-card-${highlightedIncidentId}`);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [highlightedIncidentId, incidents]);
 
   const filteredIncidents = incidents.filter((incident: any) => {
     const sev = (incident.severity || incident.priority || '').toLowerCase();
@@ -116,14 +130,19 @@ export function ActiveIncidents() {
 
       {/* Incidents Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {filteredIncidents.map((incident: any) => (
-          <IncidentCard
-            key={incident.id}
-            incident={incident}
-            onStatusChange={handleStatusChange}
-            isUpdating={updatingId === incident.id}
-          />
-        ))}
+        {filteredIncidents.map((incident: any) => {
+          const incidentIdStr = String(incident.id || incident.incident_id);
+          return (
+            <div key={incident.id} id={`incident-card-${incidentIdStr}`}>
+              <IncidentCard
+                incident={incident}
+                highlightedId={highlightedIncidentId}
+                onStatusChange={handleStatusChange}
+                isUpdating={updatingId === incident.id}
+              />
+            </div>
+          );
+        })}
       </div>
 
       {!loading && !error && filteredIncidents.length === 0 && (

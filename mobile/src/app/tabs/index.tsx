@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -35,6 +35,7 @@ import {
   ExternalLink,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useAudioPlayer } from 'expo-audio';
 import { useAuth } from '../../auth/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import {
@@ -73,6 +74,12 @@ export default function HomeScreen() {
   // Earthquake feed state
   const [earthquakes, setEarthquakes] = useState<EarthquakeEvent[]>([]);
   const [dismissedQuakeIds, setDismissedQuakeIds] = useState<string[]>([]);
+
+  // Set to track IDs that have already played sound to prevent repeats across renders/refreshes
+  const playedAlertIdsRef = useRef<Set<string>>(new Set());
+
+  // Initialize audio player using expo-audio (SDK 58 compatible)
+  const player = useAudioPlayer(require('../../../assets/alert.mp3'));
 
   const [dropdownIncidents, setDropdownIncidents] = useState<IncidentType[]>([]);
   const [selectedIncident, setSelectedIncident] = useState<IncidentType | null>(null);
@@ -138,7 +145,8 @@ export default function HomeScreen() {
       if (!session) return;
       try {
         const res = await fetchEarthquakesWithSession(session);
-        setEarthquakes(res.events);
+        const events = res.events || [];
+        setEarthquakes(events);
       } catch (err) {
         console.error('Failed to load earthquake feed:', err);
       }
@@ -149,14 +157,15 @@ export default function HomeScreen() {
     loadEarthquakeFeed();
 
     const sensorInterval = setInterval(loadSensorTemperature, 10000);
+    const earthquakeInterval = setInterval(loadEarthquakeFeed, 30 * 60 * 1000);
 
     return () => {
       clearInterval(timer);
       clearInterval(sensorInterval);
+      clearInterval(earthquakeInterval);
     };
   }, [session]);
 
-  // Filter for active earthquakes happening within the last 24 hours matching criteria, not dismissed
   const ONE_DAY_MS = 24 * 60 * 60 * 1000;
   const currentTime = new Date().getTime();
 
@@ -169,6 +178,19 @@ export default function HomeScreen() {
   });
 
   const latestAlert = activeEarthquakeAlerts.length > 0 ? activeEarthquakeAlerts[0] : null;
+
+  // Effect to play sound once when latestAlert changes and has not yet been played
+  useEffect(() => {
+    if (latestAlert && !playedAlertIdsRef.current.has(latestAlert.id)) {
+      playedAlertIdsRef.current.add(latestAlert.id);
+      try {
+        player.seekTo(0);
+        player.play();
+      } catch (audioErr) {
+        console.warn('Error playing earthquake alert sound:', audioErr);
+      }
+    }
+  }, [latestAlert, player]);
 
   const handleImmediateEmergencyReport = async () => {
     if (submitting) return;
@@ -256,39 +278,70 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Earthquake Alert Banner - Rendered ONLY if an active seismic event is happening within 24 hours */}
-        {latestAlert && (
-          <View style={styles.quakeBanner}>
-            <View style={styles.quakeBannerHeader}>
-              <View style={styles.quakeIconWrapper}>
-                <AlertTriangle size={18} color="#D97706" />
-              </View>
-              <View style={styles.quakeTitleGroup}>
-                <Text style={styles.quakeBannerTitle}>
-                  Seismic Alert (Mag {latestAlert.magnitude.toFixed(1)})
+        {/* Centered Modal Earthquake Warning Card */}
+        <Modal
+          visible={Boolean(latestAlert)}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => {}}
+        >
+          {latestAlert && (
+            <View style={styles.centeredModalOverlay}>
+              <View style={styles.quakeCenteredCard}>
+                <View style={styles.quakeIconCircle}>
+                  <AlertTriangle size={42} color="#EF4444" />
+                </View>
+
+                <Text style={styles.quakeModalTitle}>EARTHQUAKE ALERT!</Text>
+                
+                <Text style={styles.quakeMagnitudeText}>
+                  Mag {latestAlert.magnitude.toFixed(1)} — {latestAlert.place}
                 </Text>
-                <Text style={styles.quakeBannerSub} numberOfLines={2}>
-                  {latestAlert.place} — {latestAlert.distance_from_cdo_km} km from CDO (Depth: {latestAlert.depth_km} km)
+                <Text style={styles.quakeMetaText}>
+                  {latestAlert.distance_from_cdo_km} km from CDO | Depth: {latestAlert.depth_km} km
                 </Text>
+
+                <View style={styles.quakeModalDivider} />
+
+                <View style={styles.quakeInstructionsBox}>
+                  <Text style={styles.quakeInstructionHeader}>DROP, COVER, AND HOLD ON</Text>
+                  <Text style={styles.quakeInstructionBody}>
+                    Drop to your hands and knees; take cover under sturdy furniture and protect your head and neck; hold on until the shaking stops.
+                  </Text>
+                </View>
+
+                {latestAlert.url ? (
+                  <TouchableOpacity
+                    style={styles.quakeLinkBtn}
+                    onPress={() => Linking.openURL(latestAlert.url)}
+                  >
+                    <Text style={styles.quakeLinkText}>View USGS / PHIVOLCS Report</Text>
+                    <ExternalLink size={12} color="#60A5FA" />
+                  </TouchableOpacity>
+                ) : null}
+
+                <View style={styles.quakeButtonRow}>
+                  <TouchableOpacity
+                    style={styles.quakeDismissActionBtn}
+                    onPress={() => {
+                      if (latestAlert) {
+                        try {
+                          player.pause();
+                          player.seekTo(0);
+                        } catch (err) {
+                          console.warn('Error stopping alert sound:', err);
+                        }
+                        setDismissedQuakeIds((prev) => [...prev, latestAlert.id]);
+                      }
+                    }}
+                  >
+                    <Text style={styles.quakeDismissText}>Dismiss</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-              <TouchableOpacity
-                onPress={() => setDismissedQuakeIds((prev) => [...prev, latestAlert.id])}
-                style={styles.quakeDismissBtn}
-              >
-                <X size={16} color="#D97706" />
-              </TouchableOpacity>
             </View>
-            {latestAlert.url ? (
-              <TouchableOpacity
-                style={styles.quakeLinkBtn}
-                onPress={() => Linking.openURL(latestAlert.url)}
-              >
-                <Text style={styles.quakeLinkText}>View USGS / PHIVOLCS Report</Text>
-                <ExternalLink size={12} color="#B45309" />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        )}
+          )}
+        </Modal>
 
         {/* Telemetry Status Widgets */}
         <View style={styles.metricsRow}>
@@ -558,54 +611,123 @@ const styles = StyleSheet.create({
   },
   toastText: { fontSize: 13, fontWeight: '600', flex: 1, color: '#1E293B' },
 
-  quakeBanner: {
-    backgroundColor: '#FEF3C7',
-    borderLeftWidth: 4,
-    borderLeftColor: '#D97706',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  quakeBannerHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  quakeIconWrapper: {
-    padding: 4,
-  },
-  quakeTitleGroup: {
+  // Centered Modal Earthquake Warning Card Styles (Red Emergency Theme)
+  centeredModalOverlay: {
     flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
   },
-  quakeBannerTitle: {
+  quakeCenteredCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#1E293B',
+    borderRadius: 28,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#EF4444',
+    shadowColor: '#000',
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    elevation: 20,
+  },
+  quakeIconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 2,
+    borderColor: '#FCA5A5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  quakeModalTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#EF4444',
+    textAlign: 'center',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  quakeMagnitudeText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  quakeMetaText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#94A3B8',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  quakeModalDivider: {
+    width: '100%',
+    height: 1,
+    backgroundColor: '#334155',
+    marginBottom: 16,
+  },
+  quakeInstructionsBox: {
+    width: '100%',
+    backgroundColor: '#0F172A',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#334155',
+    marginBottom: 16,
+  },
+  quakeInstructionHeader: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#92400E',
-    textTransform: 'uppercase',
+    color: '#F87171',
+    textAlign: 'center',
+    marginBottom: 6,
+    letterSpacing: 0.5,
   },
-  quakeBannerSub: {
-    fontSize: 11,
-    color: '#78350F',
-    marginTop: 2,
+  quakeInstructionBody: {
+    fontSize: 12,
     fontWeight: '500',
-  },
-  quakeDismissBtn: {
-    padding: 4,
+    color: '#CBD5E1',
+    textAlign: 'center',
+    lineHeight: 18,
   },
   quakeLinkBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginTop: 8,
-    alignSelf: 'flex-start',
+    gap: 6,
+    marginBottom: 20,
   },
   quakeLinkText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
-    color: '#B45309',
+    color: '#60A5FA',
     textDecorationLine: 'underline',
+  },
+  quakeButtonRow: {
+    width: '100%',
+  },
+  quakeDismissActionBtn: {
+    width: '100%',
+    minHeight: 46,
+    borderRadius: 23,
+    backgroundColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#DC2626',
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  quakeDismissText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
 
   metricsRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },

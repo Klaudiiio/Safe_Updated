@@ -49,6 +49,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 
 
 class EarthquakeFeedAPI(APIView):
+    
     """
     Proxy endpoint to fetch earthquake events from the USGS GeoJSON feed,
     calculate distance from Cagayan de Oro, cache briefly, and return clean JSON.
@@ -60,6 +61,7 @@ class EarthquakeFeedAPI(APIView):
         cached_data = cache.get(cache_key)
         if cached_data is not None:
             return JsonResponse(cached_data, safe=False)
+            
 
         usgs_url = (
             "https://earthquake.usgs.gov/fdsnws/event/1/query?"

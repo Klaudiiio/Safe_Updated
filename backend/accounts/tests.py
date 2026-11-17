@@ -59,7 +59,7 @@ class MobileLoginRestrictionTests(TestCase):
         student_user.profile.save()
 
         response = APIClient().post(
-            '/api/auth/mobile/login/',
+            '/api/auth/login/mobile/',
             {'username': 'student1', 'password': 'test-password'},
             format='json',
         )
@@ -72,7 +72,7 @@ class MobileLoginRestrictionTests(TestCase):
         standard_user.profile.save()
 
         response = APIClient().post(
-            '/api/auth/mobile/login/',
+            '/api/auth/login/mobile/',
             {'username': 'user1', 'password': 'test-password'},
             format='json',
         )
@@ -85,7 +85,7 @@ class MobileLoginRestrictionTests(TestCase):
         admin_user.profile.save()
 
         response = APIClient().post(
-            '/api/auth/mobile/login/',
+            '/api/auth/login/mobile/',
             {'username': 'admin1', 'password': 'test-password'},
             format='json',
         )
@@ -98,7 +98,7 @@ class MobileLoginRestrictionTests(TestCase):
         staff_user.profile.save()
 
         response = APIClient().post(
-            '/api/auth/mobile/login/',
+            '/api/auth/login/mobile/',
             {'username': 'staff1', 'password': 'test-password'},
             format='json',
         )

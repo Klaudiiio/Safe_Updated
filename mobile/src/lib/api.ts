@@ -133,7 +133,6 @@ export async function authenticate(
 
   let response: Response;
   try {
-    // Route login requests to the dedicated mobile endpoint to restrict roles
     const authEndpoint = action === 'login' ? 'login/mobile' : 'register';
     response = await fetch(`${API_BASE_URL}/api/auth/${authEndpoint}/`, {
       method: 'POST',
@@ -217,6 +216,22 @@ export async function fetchProfile(accessToken: string): Promise<AuthUser> {
   return body as AuthUser;
 }
 
+export async function fetchProfileWithSession(
+  session: AuthSession,
+): Promise<{ user: AuthUser; session: AuthSession }> {
+  try {
+    const user = await fetchProfile(session.access);
+    return { user, session };
+  } catch (error) {
+    if (error instanceof Error && (error.message.includes('401') || error.message.includes('Unauthorized'))) {
+      const refreshedSession = await refreshSupabaseSession(session);
+      const user = await fetchProfile(refreshedSession.access);
+      return { user, session: refreshedSession };
+    }
+    throw error;
+  }
+}
+
 export async function updateProfile(accessToken: string, payload: ProfileUpdatePayload): Promise<ProfileUpdateResponse> {
   if (!API_BASE_URL) {
     throw new Error('Django API address is not set. Check EXPO_PUBLIC_API_URL and restart Expo.');
@@ -248,7 +263,7 @@ export async function updateProfile(accessToken: string, payload: ProfileUpdateP
   return body as ProfileUpdateResponse;
 }
 
-async function refreshSupabaseSession(session: AuthSession): Promise<AuthSession> {
+export async function refreshSupabaseSession(session: AuthSession): Promise<AuthSession> {
   if (!API_BASE_URL) throw new Error('Django API address is not set. Check EXPO_PUBLIC_API_URL.');
 
   let refreshedResponse: Response;

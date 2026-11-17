@@ -10,7 +10,7 @@ import {
 } from 'react';
 import {
   authenticate,
-  fetchProfile,
+  fetchProfileWithSession,
   submitIncidentReport as submitIncidentReportRequest,
   syncProfile as syncProfileRequest,
   updateProfile as updateProfileRequest,
@@ -31,7 +31,7 @@ interface AuthContextValue {
   supabaseSynced: boolean | null;
   syncWarning: string | null;
   syncProfile: () => Promise<void>;
-  updateProfile: (payload: ProfileUpdatePayload) => Promise<any>; // Updated return type
+  updateProfile: (payload: ProfileUpdatePayload) => Promise<any>;
   refreshProfile: () => Promise<void>;
   submitIncidentReport: (payload: IncidentReportPayload) => Promise<IncidentReportResponse>;
   submitEmergencyReport: () => Promise<IncidentReportResponse>;
@@ -46,6 +46,27 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [storageError, setStorageError] = useState<string | null>(null);
+
+  const signOut = useCallback(async () => {
+    try {
+      await SecureStore.deleteItemAsync(SESSION_KEY);
+    } catch (error) {
+      console.warn('Could not clear SecureStore session key:', error);
+    } finally {
+      setSession(null);
+      setStorageError(null);
+    }
+  }, []);
+
+  const saveSession = useCallback(async (nextSession: AuthSession) => {
+    try {
+      await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(nextSession));
+      setSession(nextSession);
+      setStorageError(null);
+    } catch {
+      throw new Error('Could not securely save your session on this device. Please try again.');
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -62,16 +83,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
     return () => {
       active = false;
     };
-  }, []);
-
-  const saveSession = useCallback(async (nextSession: AuthSession) => {
-    try {
-      await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(nextSession));
-      setSession(nextSession);
-      setStorageError(null);
-    } catch {
-      throw new Error('Could not securely save your session on this device. Please try again.');
-    }
   }, []);
 
   const signIn = useCallback(async (username: string, password: string) => {
@@ -106,15 +117,18 @@ export function AuthProvider({ children }: PropsWithChildren) {
         ...result.user,
       },
     });
-    return result; // Explicitly return result so profile.tsx can evaluate supabase_synced
+    return result;
   }, [session, saveSession]);
 
   const refreshProfile = useCallback(async () => {
-    if (!session?.access || !session?.user) return;
+    if (!session) return;
     try {
-      const updatedUser = await fetchProfile(session.access);
-     
-      // Compare fields to avoid infinite refresh loops and unnecessary re-saves
+      const res = await fetchProfileWithSession(session);
+      if (res.session !== session) {
+        await saveSession(res.session);
+      }
+      const updatedUser = res.user;
+
       const currentUser = session.user;
       const hasChanges =
         updatedUser.name !== currentUser.name ||
@@ -127,26 +141,35 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (!hasChanges) return;
 
       await saveSession({
-        ...session,
+        ...res.session,
         user: {
-          ...session.user,
+          ...res.session.user,
           ...updatedUser,
         },
       });
     } catch (error) {
       console.warn('Could not refresh profile details:', error);
+      if (error instanceof Error && (error.message.includes('401') || error.message.includes('expired'))) {
+        await signOut();
+      }
     }
-  }, [session?.access, session?.user, saveSession]);
+  }, [session, saveSession, signOut]);
 
   const submitIncidentReport = useCallback(async (payload: IncidentReportPayload) => {
     if (!session) throw new Error('Sign in before submitting an incident report.');
 
-    const result = await submitIncidentReportRequest(session, payload);
-    if (result.session !== session) await saveSession(result.session);
-    return result.report;
-  }, [session, saveSession]);
+    try {
+      const result = await submitIncidentReportRequest(session, payload);
+      if (result.session !== session) await saveSession(result.session);
+      return result.report;
+    } catch (error) {
+      if (error instanceof Error && (error.message.includes('401') || error.message.includes('expired'))) {
+        await signOut();
+      }
+      throw error;
+    }
+  }, [session, saveSession, signOut]);
 
-  // Dedicated helper for the quick emergency button
   const submitEmergencyReport = useCallback(async () => {
     if (!session) throw new Error('Sign in before submitting an emergency report.');
 
@@ -156,21 +179,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
       description: 'Immediate emergency needed',
     };
 
-    const result = await submitIncidentReportRequest(session, emergencyPayload);
-    if (result.session !== session) await saveSession(result.session);
-    return result.report;
-  }, [session, saveSession]);
-
-  const signOut = useCallback(async () => {
     try {
-      await SecureStore.deleteItemAsync(SESSION_KEY);
+      const result = await submitIncidentReportRequest(session, emergencyPayload);
+      if (result.session !== session) await saveSession(result.session);
+      return result.report;
     } catch (error) {
-      console.warn('Could not clear SecureStore session key:', error);
-    } finally {
-      setSession(null);
-      setStorageError(null);
+      if (error instanceof Error && (error.message.includes('401') || error.message.includes('expired'))) {
+        await signOut();
+      }
+      throw error;
     }
-  }, []);
+  }, [session, saveSession, signOut]);
 
   const value = useMemo(() => ({
     user: session?.user ?? null,

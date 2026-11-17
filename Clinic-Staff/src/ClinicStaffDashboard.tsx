@@ -21,7 +21,9 @@ import {
   Users,
   UserCheck,
   UserPlus,
-  ExternalLink
+  ExternalLink,
+  Volume2,
+  RefreshCw
 } from 'lucide-react';
 
 interface StaffDashboardProps {
@@ -60,7 +62,7 @@ interface NotificationItem {
   time: string;
   type: string;
   unread: boolean;
-  incidentId: number;
+  incidentId?: number;
 }
 
 interface EarthquakeEvent {
@@ -154,6 +156,16 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const [incidents, setIncidents] = useState<IncidentReport[]>([]);
   const [responders, setResponders] = useState<Responder[]>([]);
   const [earthquakes, setEarthquakes] = useState<EarthquakeEvent[]>([]);
+  const [dismissedQuakeIds, setDismissedQuakeIds] = useState<string[]>([]);
+
+  // Audio alert state. The first normal interaction unlocks future sound playback
+  // in browsers that block autoplay until the user interacts with the page.
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUnlockedRef = useRef(false);
+  const pendingQuakeAudioIdRef = useRef<string | null>(null);
+  const audioHandledQuakeIdsRef = useRef<Set<string>>(new Set());
+  const latestQuakeAlertRef = useRef<EarthquakeEvent | null>(null);
+
   const [loading, setLoading] = useState(true);
   const [loadingEarthquakes, setLoadingEarthquakes] = useState(false);
   const [submittingAssignment, setSubmittingAssignment] = useState(false);
@@ -176,7 +188,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const [editablePhone] = useState('+63 912 345 6789');
 
   // Filter & Search States
-  const [feedStatusFilter, setFeedStatusFilter] = useState<'all' | 'pending' | 'active' | 'assigned' | 'resolved'>('all');
+  const [feedStatusFilter, setFeedStatusFilter] = useState<'all' | 'pending' | 'active' | 'assigned'>('all');
   const [rosterFilter, setRosterFilter] = useState<'all' | 'available' | 'busy' | 'offline'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const searchContainerRef = useRef<HTMLDivElement>(null);
@@ -209,21 +221,19 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     try {
       let rawIncidents: any[] = [];
       try {
-        const queryWithUser = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name),user(username,name),users(username,name),auth_user(username)';
-        rawIncidents = await supabaseRequest(`incident?select=${queryWithUser}&order=reported_at.desc`);
+        const queryWithRelations = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name)';
+        rawIncidents = await supabaseRequest(`incident?select=${queryWithRelations}&order=reported_at.desc`);
       } catch {
         try {
-          const queryFallback = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name),users(username)';
-          rawIncidents = await supabaseRequest(`incident?select=${queryFallback}&order=reported_at.desc`);
+          rawIncidents = await supabaseRequest('incident?select=*,incident_types(incident_name)&order=reported_at.desc');
         } catch {
-          const baseQuery = 'incident_id,description,location_description,status,reported_at,user_id,incident_types_id,incident_types(incident_name)';
-          rawIncidents = await supabaseRequest(`incident?select=${baseQuery}&order=reported_at.desc`);
+          rawIncidents = await supabaseRequest('incident?select=*');
         }
       }
 
       let rawResponders: any[] = [];
       try {
-        rawResponders = await supabaseRequest('responder?select=*&order=name.asc');
+        rawResponders = await supabaseRequest('responder?select=*');
       } catch (err) {
         console.error('Failed to load responder roster:', err);
       }
@@ -231,30 +241,17 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
       const assignmentMap: Record<number, number> = {};
       try {
-        const notifAssignments = await supabaseRequest('responder_notification?select=incident_id,responder_id&order=created_at.desc');
+        const notifAssignments = await supabaseRequest('responder_notification?select=incident_id,responder_id');
         if (Array.isArray(notifAssignments)) {
           notifAssignments.forEach((n: any) => {
-            if (n.incident_id && n.responder_id && !assignmentMap[n.incident_id]) {
+            if (n.incident_id && n.responder_id) {
               assignmentMap[n.incident_id] = n.responder_id;
             }
           });
         }
-      } catch {
-        try {
-          const notifAssignmentsAlt = await supabaseRequest('responder_notification?select=incident_id,responder_id');
-          if (Array.isArray(notifAssignmentsAlt)) {
-            notifAssignmentsAlt.forEach((n: any) => {
-              if (n.incident_id && n.responder_id) {
-                assignmentMap[n.incident_id] = n.responder_id;
-              }
-            });
-          }
-        } catch {}
-      }
+      } catch {}
 
-      const userIds = Array.from(new Set((rawIncidents || []).map(r => r.user_id).filter(Boolean)));
       const usernameMap: Record<number, string> = {};
-
       try {
         const allUsers = await supabaseRequest('user?select=*');
         if (Array.isArray(allUsers)) {
@@ -277,17 +274,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
         } catch {}
       }
 
-      for (const uid of userIds) {
-        if (!usernameMap[uid]) {
-          try {
-            const uRes = await supabaseRequest(`user?user_id=eq.${uid}&select=username,name`);
-            if (Array.isArray(uRes) && uRes.length > 0) {
-              usernameMap[uid] = uRes[0].username || uRes[0].name;
-            }
-          } catch {}
-        }
-      }
-
       const responderMap: Record<number, string> = {};
       (rawResponders || []).forEach((resp: any) => {
         const rid = resp.responder_id ?? resp.id;
@@ -295,22 +281,17 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       });
 
       const formattedIncidents: IncidentReport[] = (rawIncidents || []).map((row: any) => {
-        const embeddedName =
-          row.user?.username ||
-          row.user?.name ||
-          row.users?.username ||
-          row.users?.name ||
-          row.auth_user?.username;
-
         const lookupName = row.user_id ? usernameMap[row.user_id] : undefined;
-        const resolvedReporterName = embeddedName || lookupName || row.user_name || (row.user_id ? `User #${row.user_id}` : 'Anonymous User');
+        const resolvedReporterName = lookupName || row.user_name || (row.user_id ? `User #${row.user_id}` : 'Anonymous User');
 
         const assignedId = row.assigned_responder_id ?? assignmentMap[row.incident_id];
         const assignedName = assignedId ? responderMap[assignedId] : undefined;
 
+        const resolvedIncidentName = row.incident_types?.incident_name || row.incident_name || `Medical Assistance #${row.incident_types_id || 'General'}`;
+
         return {
           ...row,
-          incident_name: row.incident_types?.incident_name || 'General Incident',
+          incident_name: resolvedIncidentName,
           reporter_name: resolvedReporterName,
           assigned_responder_id: assignedId,
           assigned_responder_name: assignedName,
@@ -318,41 +299,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       });
 
       setIncidents(formattedIncidents);
-
-      const generatedNotifications: NotificationItem[] = formattedIncidents.map((inc: IncidentReport) => {
-        const statusLower = (inc.status || 'pending').toLowerCase();
-        let title = `Incident #${inc.incident_id}`;
-        let type = 'info';
-
-        if (statusLower === 'active' || statusLower === 'critical') {
-          type = 'critical';
-        } else if (['assigned', 'accepted', 'responding'].includes(statusLower)) {
-          type = 'assigned';
-        } else if (['resolved', 'completed'].includes(statusLower)) {
-          type = 'success';
-        }
-
-        let timeStr = 'Recently';
-        if (inc.reported_at) {
-          const diffMins = Math.floor((new Date().getTime() - new Date(inc.reported_at).getTime()) / (1000 * 60));
-          if (diffMins < 1) timeStr = 'Just now';
-          else if (diffMins < 60) timeStr = `${diffMins} mins ago`;
-          else if (diffMins < 1440) timeStr = `${Math.floor(diffMins / 60)} hrs ago`;
-          else timeStr = new Date(inc.reported_at).toLocaleDateString();
-        }
-
-        return {
-          id: inc.incident_id,
-          title,
-          message: `${inc.incident_name} at ${inc.location_description || 'Campus'} reported by ${inc.reporter_name}.`,
-          time: timeStr,
-          type,
-          unread: statusLower === 'pending' || statusLower === 'active',
-          incidentId: inc.incident_id,
-        };
-      });
-
-      setNotifications(generatedNotifications);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Unable to load incident reports and roster.');
     } finally {
@@ -360,8 +306,8 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }
   }, []);
 
-  const loadEarthquakes = useCallback(async () => {
-    setLoadingEarthquakes(true);
+  const loadEarthquakes = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoadingEarthquakes(true);
     try {
       const token = localStorage.getItem('clinic_staff_access_token');
       const res = await fetch(`${API_BASE_URL}/earthquakes/`, {
@@ -369,19 +315,260 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       });
       if (res.ok) {
         const data = await res.json();
-        setEarthquakes(data.events || []);
+        // Keep locally generated test events visible while real earthquake data refreshes.
+        setEarthquakes((previous) => [
+          ...(data.events || []),
+          ...previous.filter((event) => event.source === 'Simulation Test'),
+        ]);
       }
     } catch (err) {
       console.error('Failed to load earthquake feed:', err);
     } finally {
-      setLoadingEarthquakes(false);
+      if (showLoading) setLoadingEarthquakes(false);
     }
   }, []);
 
+  // Add a local-only earthquake event to test the existing alert modal and audio.
+  // This does not call the backend or create a real earthquake record.
+  const handleTestEarthquake = useCallback(() => {
+    const testId = `manual-test-${Date.now()}`;
+    const testEarthquake: EarthquakeEvent = {
+      id: testId,
+      magnitude: 6.2,
+      place: 'Test Seismic Zone, Philippines',
+      time: Date.now(),
+      url: 'https://earthquake.usgs.gov/',
+      depth_km: 15,
+      distance_from_cdo_km: 20,
+      source: 'Simulation Test',
+    };
+
+    setDismissedQuakeIds((previous) => previous.filter((id) => id !== testId));
+    setEarthquakes((previous) => [
+      testEarthquake,
+      ...previous.filter((event) => event.source !== 'Simulation Test'),
+    ]);
+  }, []);
+
+  // Refresh incident reports once per minute, but check the earthquake feed
+  // every 10 seconds so new alerts are detected sooner.
   useEffect(() => {
     void loadData();
     void loadEarthquakes();
+
+    const dataPolling = setInterval(() => {
+      void loadData();
+    }, 60 * 1000);
+
+    const earthquakePolling = setInterval(() => {
+      // Silent background refresh; keep the manual refresh icon from flashing.
+      void loadEarthquakes(false);
+    }, 10 * 1000);
+
+    return () => {
+      clearInterval(dataPolling);
+      clearInterval(earthquakePolling);
+    };
   }, [loadData, loadEarthquakes]);
+
+  // Supabase Realtime Subscription for instant Incident Feed updates
+  useEffect(() => {
+    if (!SUPABASE_URL || !SUPABASE_KEY) return;
+    const wsProtocol = SUPABASE_URL.startsWith('https') ? 'wss://' : 'ws://';
+    const cleanHost = SUPABASE_URL.replace(/^https?:\/\//, '');
+    const realtimeUrl = `${wsProtocol}${cleanHost}/realtime/v1/websocket?apikey=${SUPABASE_KEY}&vsn=1.0.0`;
+
+    let socket: WebSocket | null = null;
+    try {
+      socket = new WebSocket(realtimeUrl);
+      socket.onopen = () => {
+        socket?.send(JSON.stringify({
+          topic: 'realtime:public:incident',
+          event: 'phx_join',
+          payload: { config: { postgres_changes: [{ event: '*', schema: 'public', table: 'incident' }] } },
+          ref: '1'
+        }));
+      };
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.event === 'postgres_changes') {
+            void loadData();
+          }
+        } catch {}
+      };
+    } catch (err) {
+      console.warn('Realtime socket connection failed, relying on polling:', err);
+    }
+
+    return () => {
+      if (socket) socket.close();
+    };
+  }, [loadData]);
+
+  // Derive active recent earthquake (within 24 hours, magnitude >= 4.0 or within 300km)
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  const currentTimestamp = new Date().getTime();
+
+  const activeEarthquakeAlerts = useMemo(() => {
+    return earthquakes.filter((eq) => {
+      const isWithin24Hours = currentTimestamp - eq.time <= ONE_DAY_MS;
+      const meetsCriteria = eq.magnitude >= 4.0 || eq.distance_from_cdo_km <= 300;
+      const notDismissed = !dismissedQuakeIds.includes(eq.id);
+      return isWithin24Hours && meetsCriteria && notDismissed;
+    });
+  }, [earthquakes, dismissedQuakeIds, currentTimestamp]);
+
+  // Select the most recent qualifying event, regardless of the API's array order.
+  const latestQuakeAlert = activeEarthquakeAlerts.reduce<EarthquakeEvent | null>(
+    (latest, quake) => (!latest || quake.time > latest.time ? quake : latest),
+    null
+  );
+  latestQuakeAlertRef.current = latestQuakeAlert;
+
+  const stopEarthquakeAudio = useCallback(() => {
+    pendingQuakeAudioIdRef.current = null;
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+  }, []);
+
+  const playEarthquakeAudio = useCallback((quakeId: string) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    // Save the alert until the browser permits sound playback after user interaction.
+    if (!audioUnlockedRef.current) {
+      pendingQuakeAudioIdRef.current = quakeId;
+      return;
+    }
+
+    audio.muted = false;
+    audio.loop = true;
+    audio.currentTime = 0;
+    void audio.play().then(() => {
+      if (pendingQuakeAudioIdRef.current === quakeId) {
+        pendingQuakeAudioIdRef.current = null;
+      }
+    }).catch((err) => {
+      pendingQuakeAudioIdRef.current = quakeId;
+      audioUnlockedRef.current = false;
+      console.warn('Earthquake audio is waiting for a user interaction:', err);
+    });
+  }, []);
+
+  // Play once for each newly displayed earthquake. Older alerts revealed after
+  // dismissing the current one will not restart the siren.
+  useEffect(() => {
+    if (!latestQuakeAlert) {
+      stopEarthquakeAudio();
+      return;
+    }
+
+    if (audioHandledQuakeIdsRef.current.has(latestQuakeAlert.id)) return;
+    audioHandledQuakeIdsRef.current.add(latestQuakeAlert.id);
+    playEarthquakeAudio(latestQuakeAlert.id);
+  }, [latestQuakeAlert?.id, playEarthquakeAudio, stopEarthquakeAudio]);
+
+  // Browsers block audible autoplay until the user interacts with the page.
+  // A muted play/pause primes the audio element; when an alert is already
+  // waiting, the first non-dismiss interaction starts its sound directly.
+  const handleAudioUserGesture = useCallback((event: any) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest?.('[data-earthquake-dismiss="true"]')) return;
+
+    const audio = audioRef.current;
+    if (!audio || audioUnlockedRef.current) return;
+
+    const pendingId = pendingQuakeAudioIdRef.current;
+    if (pendingId && latestQuakeAlertRef.current?.id === pendingId) {
+      audio.muted = false;
+      audio.loop = true;
+      audio.currentTime = 0;
+      void audio.play().then(() => {
+        audioUnlockedRef.current = true;
+        pendingQuakeAudioIdRef.current = null;
+      }).catch((err) => {
+        console.warn('Unable to start earthquake audio after user interaction:', err);
+      });
+      return;
+    }
+
+    audio.muted = true;
+    audio.loop = false;
+    void audio.play().then(() => {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.muted = false;
+      audioUnlockedRef.current = true;
+
+      // An earthquake may have arrived while the muted audio was being primed.
+      const waitingId = pendingQuakeAudioIdRef.current;
+      if (waitingId && latestQuakeAlertRef.current?.id === waitingId) {
+        audio.loop = true;
+        audio.currentTime = 0;
+        void audio.play().then(() => {
+          pendingQuakeAudioIdRef.current = null;
+        }).catch((err) => {
+          console.warn('Unable to start the pending earthquake audio:', err);
+        });
+      }
+    }).catch(() => {
+      audio.muted = false;
+    });
+  }, []);
+
+  // Combined Notifications (Incidents + Earthquakes)
+  useEffect(() => {
+    const now = Date.now();
+    const incidentNotifs: NotificationItem[] = incidents.map((inc: IncidentReport) => {
+      const statusLower = (inc.status || 'pending').toLowerCase();
+      let title = `Incident #${inc.incident_id}`;
+      let type = 'info';
+
+      if (statusLower === 'active' || statusLower === 'critical') {
+        type = 'critical';
+      } else if (['assigned', 'accepted', 'responding'].includes(statusLower)) {
+        type = 'assigned';
+      } else if (['resolved', 'completed'].includes(statusLower)) {
+        type = 'success';
+      }
+
+      let timeStr = 'Recently';
+      if (inc.reported_at) {
+        const diffMins = Math.floor((now - new Date(inc.reported_at).getTime()) / (1000 * 60));
+        if (diffMins < 1) timeStr = 'Just now';
+        else if (diffMins < 60) timeStr = `${diffMins} mins ago`;
+        else if (diffMins < 1440) timeStr = `${Math.floor(diffMins / 60)} hrs ago`;
+        else timeStr = new Date(inc.reported_at).toLocaleDateString();
+      }
+
+      return {
+        id: `inc-${inc.incident_id}`,
+        title,
+        message: `${inc.incident_name} at ${inc.location_description || 'Campus'} reported by ${inc.reporter_name}.`,
+        time: timeStr,
+        type,
+        unread: statusLower === 'pending' || statusLower === 'active',
+        incidentId: inc.incident_id,
+      };
+    });
+
+    const earthquakeNotifs: NotificationItem[] = earthquakes
+      .filter((eq) => now - eq.time <= ONE_DAY_MS && (eq.magnitude >= 4.0 || eq.distance_from_cdo_km <= 300))
+      .map((eq) => ({
+        id: `eq-${eq.id}`,
+        title: `⚠️ Earthquake Reported (Mag ${eq.magnitude.toFixed(1)})`,
+        message: `${eq.place} — ${eq.distance_from_cdo_km} km from CDO (Depth: ${eq.depth_km} km). Drop, Cover, and Hold On.`,
+        time: 'Recent',
+        type: 'critical',
+        unread: true,
+      }));
+
+    setNotifications([...earthquakeNotifs, ...incidentNotifs]);
+  }, [incidents, earthquakes]);
 
   const updateResponderAvailability = async (responder: Responder, newStatus: string) => {
     const rid = responder.responder_id ?? responder.id;
@@ -469,22 +656,20 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     setSelectedResponderIdForModal(item.assigned_responder_id || 0);
   };
 
-  const getStatusPriority = (status?: string): number => {
-    const s = (status || 'pending').toLowerCase();
-    if (s === 'pending') return 1;
-    if (s === 'active' || s === 'critical') return 2;
-    if (['assigned', 'accepted', 'responding'].includes(s)) return 3;
-    if (['resolved', 'completed', 'cancelled'].includes(s)) return 4;
-    return 5;
-  };
+  // Case-insensitive filtering excluding resolved/completed cases for active operational feed
+  const activeOperationalIncidents = useMemo(() => {
+    return incidents.filter((item) => {
+      const s = (item.status || 'pending').toLowerCase();
+      return s !== 'resolved' && s !== 'completed';
+    });
+  }, [incidents]);
 
   const prioritizedAndFilteredIncidents = useMemo(() => {
-    let list = [...incidents];
+    let list = [...activeOperationalIncidents];
     if (feedStatusFilter !== 'all') {
       list = list.filter((item) => {
         const s = (item.status || 'pending').toLowerCase();
         if (feedStatusFilter === 'assigned') return ['assigned', 'accepted', 'responding'].includes(s);
-        if (feedStatusFilter === 'resolved') return ['resolved', 'completed'].includes(s);
         return s === feedStatusFilter;
       });
     }
@@ -510,8 +695,13 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       });
     }
 
-    return list.sort((a, b) => getStatusPriority(a.status) - getStatusPriority(b.status));
-  }, [incidents, feedStatusFilter, searchQuery]);
+    // Sort incidents by reported_at newest-first
+    return list.sort((a, b) => {
+      const timeA = a.reported_at ? new Date(a.reported_at).getTime() : 0;
+      const timeB = b.reported_at ? new Date(b.reported_at).getTime() : 0;
+      return timeB - timeA;
+    });
+  }, [activeOperationalIncidents, feedStatusFilter, searchQuery]);
 
   const filteredIncidents = useMemo(() => {
     if (!searchQuery.trim()) return incidents;
@@ -546,7 +736,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const activeCount = incidents.filter((row) => (row.status?.toLowerCase() ?? '') === 'active').length;
   const assignedCount = incidents.filter((row) => ['assigned', 'accepted', 'responding'].includes(row.status?.toLowerCase() ?? '')).length;
 
-  const acceptedIncidents = filteredIncidents.filter((row) => {
+  const acceptedIncidents = incidents.filter((row) => {
     const s = row.status?.toLowerCase() ?? '';
     return ['assigned', 'accepted', 'responding', 'active'].includes(s);
   });
@@ -555,7 +745,75 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const initials = editableName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#F0F6FF] via-[#E0F2FE] to-[#BAE6FD] text-slate-800 flex flex-col md:flex-row antialiased">
+    <div
+      onPointerDownCapture={handleAudioUserGesture}
+      onKeyDownCapture={handleAudioUserGesture}
+      className="min-h-screen bg-gradient-to-br from-[#F0F6FF] via-[#E0F2FE] to-[#BAE6FD] text-slate-800 flex flex-col md:flex-row antialiased"
+    >
+      {/* Hidden Audio Element */}
+      <audio ref={audioRef} src="/earthquake-alert.mp3" preload="auto" loop />
+
+      {/* CENTERED EARTHQUAKE ALERT MODAL CARD */}
+      {latestQuakeAlert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="bg-[#2a0808] text-white rounded-3xl p-6 md:p-8 max-w-lg w-full shadow-2xl border border-red-600/50 flex flex-col items-center text-center relative overflow-hidden">
+
+            <div className="w-20 h-20 bg-[#ffeb99] rounded-full flex items-center justify-center shadow-lg shadow-red-950/50 mb-5 animate-bounce">
+              <AlertTriangle className="w-10 h-10 text-amber-700 stroke-[2.5]" />
+            </div>
+
+            <h2 className="text-2xl font-black tracking-wider text-amber-400 mb-2">
+              EARTHQUAKE ALERT!
+            </h2>
+            <p className="text-base font-bold text-white mb-1">
+              Mag {latestQuakeAlert.magnitude.toFixed(1)} — {latestQuakeAlert.place}
+            </p>
+            <p className="text-xs font-medium text-red-200/80 mb-6">
+              {latestQuakeAlert.distance_from_cdo_km} km from CDO | Depth: {latestQuakeAlert.depth_km} km
+            </p>
+
+            <div className="w-full bg-[#180404] rounded-2xl p-4 mb-6 border border-red-900/60 text-center">
+              <h4 className="text-xs font-black uppercase tracking-widest text-amber-400 mb-2">
+                Drop, Cover, and Hold On
+              </h4>
+              <p className="text-xs text-red-100/90 leading-relaxed">
+                Drop to your hands and knees; take cover under sturdy furniture and protect your head and neck; hold on until the shaking stops.
+              </p>
+            </div>
+
+            {latestQuakeAlert.url && (
+              <a
+                href={latestQuakeAlert.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-bold text-sky-400 hover:text-sky-300 underline underline-offset-4 flex items-center space-x-1.5 mb-6 transition"
+              >
+                <span>View USGS / PHIVOLCS Report</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+
+            <button
+              data-earthquake-dismiss="true"
+              onClick={() => {
+                // Mark every alert already in this batch as handled so switching
+                // to an older alert does not restart the sound after Dismiss.
+                activeEarthquakeAlerts.forEach((quake) => {
+                  audioHandledQuakeIdsRef.current.add(quake.id);
+                });
+                stopEarthquakeAudio();
+                setDismissedQuakeIds((prev) =>
+                  prev.includes(latestQuakeAlert.id) ? prev : [...prev, latestQuakeAlert.id]
+                );
+              }}
+              className="w-full py-3.5 bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white rounded-2xl text-sm font-black shadow-lg shadow-red-900/50 transition cursor-pointer tracking-wide"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* MOBILE SIDEBAR OVERLAY */}
       {mobileMenu && (
         <div
@@ -626,7 +884,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ml-2 ${
                 currentTab === 'assignments' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-900/40 text-indigo-200 border border-indigo-400/30'
               }`}>
-                {incidents.length}
+                {activeOperationalIncidents.length}
               </span>
             </button>
 
@@ -681,6 +939,12 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
             </button>
           </nav>
         </div>
+
+        <div className="pt-4 border-t border-indigo-950/60">
+          <div className="text-[10px] text-indigo-400 text-center font-medium">
+            SAFE Clinic Dispatch v2.4
+          </div>
+        </div>
       </aside>
 
       {/* MAIN CONTAINER */}
@@ -709,123 +973,85 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               <span className="text-sm font-bold text-white">
                 {currentDateTime.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
               </span>
-              <span className="text-xs font-mono text-sky-300 font-bold">
+              <span className="text-xs text-sky-200 font-semibold">
                 {currentDateTime.toLocaleTimeString()}
               </span>
             </div>
 
-            {/* SEARCH BAR */}
-            <div className="relative hidden lg:block" ref={searchContainerRef}>
-              <div className="relative flex items-center">
-                <Search className="w-4 h-4 absolute left-3.5 text-indigo-300" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search incidents, reporters..."
-                  className="pl-10 pr-8 py-2 w-72 text-sm bg-indigo-950/80 text-white placeholder-indigo-300 border border-indigo-800 rounded-xl focus:outline-none focus:bg-indigo-950 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium"
-                />
-                {searchQuery && (
-                  <button onClick={() => setSearchQuery('')} className="absolute right-3 text-indigo-300 hover:text-white">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* NOTIFICATIONS */}
+            {/* Notification Bell Dropdown Toggle */}
             <div className="relative">
               <button
-                onClick={() => {
-                  setShowNotifications(!showNotifications);
-                  setShowProfileModal(false);
-                }}
-                className={`relative p-2.5 rounded-xl text-indigo-200 hover:bg-indigo-900/60 transition cursor-pointer ${
-                  showNotifications ? 'bg-indigo-950 text-indigo-400' : ''
-                }`}
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="p-2.5 bg-indigo-900/60 hover:bg-indigo-900 text-indigo-200 hover:text-white rounded-xl relative transition cursor-pointer"
               >
                 <Bell className="w-5 h-5" />
                 {unreadCount > 0 && (
-                  <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-rose-500 rounded-full ring-2 ring-[#201B50] animate-pulse" />
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-600 text-white rounded-full text-[10px] font-extrabold flex items-center justify-center border-2 border-[#201B50]">
+                    {unreadCount}
+                  </span>
                 )}
               </button>
 
               {showNotifications && (
-                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-indigo-200 py-2 z-50 text-slate-800">
-                  <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-                    <span className="font-bold text-sm text-slate-900">Notifications</span>
-                    <span className="text-xs text-indigo-600 font-semibold cursor-pointer" onClick={() => setNotifications(notifications.map(n => ({ ...n, unread: false })))}>
-                      Mark all read
+                <div className="absolute right-0 mt-3 w-80 md:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 overflow-hidden text-slate-800 animate-in fade-in duration-150">
+                  <div className="px-4 py-3 bg-[#201B50] text-white flex items-center justify-between">
+                    <span className="font-extrabold text-sm">Notifications & Alerts</span>
+                    <span className="text-xs bg-indigo-900 px-2 py-0.5 rounded-full text-indigo-200 font-bold">
+                      {unreadCount} New
                     </span>
                   </div>
                   <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
-                    {notifications.length > 0 ? (
-                      notifications.map((item) => (
-                        <div
-                          key={item.id}
-                          onClick={() => {
-                            setShowNotifications(false);
-                            setCurrentTab('assignments');
-                          }}
-                          className={`p-3.5 hover:bg-slate-50 transition cursor-pointer flex items-start space-x-3 ${item.unread ? 'bg-indigo-50/50' : ''}`}
-                        >
-                          <div className={`p-2 rounded-xl mt-0.5 ${item.type === 'critical' ? 'bg-rose-100 text-rose-600' : 'bg-indigo-100 text-indigo-600'}`}>
-                            <AlertTriangle className="w-4 h-4" />
+                    {notifications.length === 0 ? (
+                      <div className="p-6 text-center text-slate-400 text-sm">No notifications available</div>
+                    ) : (
+                      notifications.map((n) => (
+                        <div key={n.id} className={`p-3.5 hover:bg-slate-50 transition ${n.unread ? 'bg-indigo-50/50' : ''}`}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-slate-900">{n.title}</span>
+                            <span className="text-[10px] text-slate-400 font-medium">{n.time}</span>
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between">
-                              <p className="text-xs font-bold text-slate-900 truncate">{item.title}</p>
-                              <span className="text-[10px] text-slate-400 shrink-0 ml-2">{item.time}</span>
-                            </div>
-                            <p className="text-xs text-slate-600 mt-0.5 line-clamp-2">{item.message}</p>
-                          </div>
+                          <p className="text-xs text-slate-600 leading-relaxed">{n.message}</p>
                         </div>
                       ))
-                    ) : (
-                      <div className="py-8 text-center text-sm text-slate-500">No notifications</div>
                     )}
                   </div>
                 </div>
               )}
             </div>
 
-            {/* USER PROFILE BUTTON */}
+            {/* Profile Avatar Button with Dropdown Menu */}
             <div className="relative">
               <button
-                onClick={() => {
-                  setShowProfileModal(!showProfileModal);
-                  setShowNotifications(false);
-                }}
-                className="flex items-center space-x-3 pl-2 py-1.5 rounded-xl hover:bg-indigo-900/50 transition cursor-pointer"
+                onClick={() => setShowProfileModal(!showProfileModal)}
+                className="w-10 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center font-extrabold text-sm shadow-md transition cursor-pointer"
               >
-                <div className="w-9 h-9 rounded-xl bg-indigo-600 font-bold text-white flex items-center justify-center text-sm shadow-md">
-                  {initials}
-                </div>
-                <div className="hidden xl:block text-left">
-                  <span className="block text-sm font-bold text-white truncate max-w-[130px]">{editableName}</span>
-                  <span className="block text-[11px] text-sky-300 truncate max-w-[130px]">Coordinator</span>
-                </div>
-                <ChevronDown className="w-4 h-4 text-indigo-300 hidden xl:block" />
+                {initials}
               </button>
 
               {showProfileModal && (
-                <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-2xl border border-indigo-200 py-3 z-50 text-slate-800">
-                  <div className="px-4 pb-3 border-b border-slate-100 text-center">
-                    <div className="w-14 h-14 rounded-2xl bg-indigo-600 text-white font-extrabold text-xl flex items-center justify-center mx-auto mb-2 shadow-lg shadow-indigo-600/30">
+                <div className="absolute right-0 mt-3 w-72 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 overflow-hidden text-slate-800 animate-in fade-in duration-150 p-4 space-y-4">
+                  <div className="flex items-center space-x-3 border-b border-slate-100 pb-3">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-black text-sm shrink-0">
                       {initials}
                     </div>
-                    <p className="font-bold text-slate-900 text-base">{editableName}</p>
-                    <p className="text-xs text-indigo-600 font-medium mt-0.5">{editableRole}</p>
-                    <p className="text-xs text-slate-400 mt-1">{editableEmail}</p>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-black text-slate-900 truncate">{editableName}</h4>
+                      <p className="text-[10px] text-indigo-600 font-bold truncate">{editableRole}</p>
+                    </div>
                   </div>
 
-                  <div className="p-2 space-y-1">
+                  <div className="space-y-1.5 text-xs text-slate-600 font-medium">
+                    <p className="truncate"><strong>Email:</strong> {editableEmail}</p>
+                    <p className="truncate"><strong>Phone:</strong> {editablePhone}</p>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100">
                     <button
                       onClick={() => {
                         setShowProfileModal(false);
                         onLogout();
                       }}
-                      className="w-full flex items-center space-x-2 px-3 py-2.5 rounded-xl text-sm font-semibold text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                      className="w-full flex items-center justify-center space-x-2 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-extrabold transition cursor-pointer"
                     >
                       <LogOut className="w-4 h-4" />
                       <span>Sign Out</span>
@@ -837,185 +1063,190 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
           </div>
         </header>
 
-        {/* MAIN BODY CONTENT */}
+        {/* TAB CONTENT AREA */}
         <main className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
           {error && (
-            <div className="bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 rounded-2xl text-sm flex items-center justify-between shadow-sm">
-              <span className="font-medium">{error}</span>
-              <button onClick={() => setError('')} className="text-rose-400 hover:text-rose-700 font-bold ml-4">×</button>
+            <div className="bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 rounded-2xl text-sm font-semibold flex items-center justify-between shadow-sm">
+              <span>{error}</span>
+              <button onClick={() => setError('')} className="text-rose-500 hover:text-rose-700 font-bold ml-2">Dismiss</button>
             </div>
           )}
 
-          {/* DASHBOARD TAB */}
           {currentTab === 'dashboard' && (
             <div className="space-y-6">
-              {/* STATS OVERVIEW CARDS */}
+              {/* METRICS CARDS */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Pending Reports</p>
-                    <p className="text-3xl font-extrabold text-slate-900 mt-1">{pendingCount}</p>
+                <div
+                  onClick={() => { setCurrentTab('assignments'); setFeedStatusFilter('pending'); }}
+                  className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200/80 hover:shadow-md transition cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Pending Incidents</span>
+                    <div className="p-2.5 bg-rose-50 text-rose-600 rounded-2xl group-hover:bg-rose-100 transition">
+                      <AlertTriangle className="w-5 h-5" />
+                    </div>
                   </div>
-                  <div className="p-3 bg-amber-50 text-amber-600 rounded-2xl">
-                    <AlertTriangle className="w-6 h-6" />
-                  </div>
+                  <div className="text-3xl font-black text-slate-900 mb-1">{pendingCount}</div>
+                  <span className="text-xs font-semibold text-rose-600">Requires immediate review</span>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Incidents</p>
-                    <p className="text-3xl font-extrabold text-rose-600 mt-1">{activeCount}</p>
+                <div
+                  onClick={() => { setCurrentTab('assignments'); setFeedStatusFilter('active'); }}
+                  className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200/80 hover:shadow-md transition cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Active Cases</span>
+                    <div className="p-2.5 bg-amber-50 text-amber-600 rounded-2xl group-hover:bg-amber-100 transition">
+                      <Activity className="w-5 h-5" />
+                    </div>
                   </div>
-                  <div className="p-3 bg-rose-50 text-rose-600 rounded-2xl">
-                    <ShieldAlert className="w-6 h-6" />
-                  </div>
+                  <div className="text-3xl font-black text-slate-900 mb-1">{activeCount}</div>
+                  <span className="text-xs font-semibold text-amber-600">In progress on campus</span>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Assigned Cases</p>
-                    <p className="text-3xl font-extrabold text-indigo-600 mt-1">{assignedCount}</p>
+                <div
+                  onClick={() => { setCurrentTab('accepted'); }}
+                  className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200/80 hover:shadow-md transition cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Assigned / Responding</span>
+                    <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl group-hover:bg-indigo-100 transition">
+                      <ClipboardList className="w-5 h-5" />
+                    </div>
                   </div>
-                  <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl">
-                    <ClipboardList className="w-6 h-6" />
-                  </div>
+                  <div className="text-3xl font-black text-slate-900 mb-1">{assignedCount}</div>
+                  <span className="text-xs font-semibold text-indigo-600">Responders deployed</span>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Available Responders</p>
-                    <p className="text-3xl font-extrabold text-emerald-600 mt-1">
-                      {availableRespondersList.length} <span className="text-sm font-medium text-slate-400">/ {responders.length}</span>
-                    </p>
+                <div
+                  onClick={() => { setCurrentTab('roster'); setRosterFilter('available'); }}
+                  className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200/80 hover:shadow-md transition cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Available Responders</span>
+                    <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-2xl group-hover:bg-emerald-100 transition">
+                      <Users className="w-5 h-5" />
+                    </div>
                   </div>
-                  <div className="p-3 bg-emerald-50 text-emerald-600 rounded-2xl">
-                    <UserCheck className="w-6 h-6" />
+                  <div className="text-3xl font-black text-slate-900 mb-1">
+                    {availableRespondersList.length} / {responders.length}
                   </div>
+                  <span className="text-xs font-semibold text-emerald-600">Ready for dispatch</span>
                 </div>
               </div>
 
-              {/* TWO-COLUMN MAIN DASHBOARD SPLIT: LEFT (INCIDENTS), RIGHT (EARTHQUAKES) */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-                {/* LEFT: INCIDENT REPORT QUICK VIEW TABLE (2 COLUMNS WIDE, SCROLLABLE) */}
-                <div className="lg:col-span-2 bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 flex flex-col">
+              {/* TWO COLUMN GRID */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Live Incident Feed Summary */}
+                <div className="lg:col-span-2 bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 flex flex-col">
                   <div className="flex items-center justify-between mb-4">
                     <div>
-                      <h2 className="text-base font-bold text-slate-900">Incident Report</h2>
-                      <p className="text-xs text-slate-500">Latest distress calls and medical requests from campus</p>
+                      <h3 className="text-lg font-extrabold text-slate-900">Live Incident Feed</h3>
+                      <p className="text-xs text-slate-500 font-medium">Real-time emergency reports from students and kiosks</p>
                     </div>
                     <button
                       onClick={() => setCurrentTab('assignments')}
-                      className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center space-x-1 cursor-pointer"
+                      className="text-xs font-extrabold text-indigo-600 hover:text-indigo-800 flex items-center space-x-1 cursor-pointer"
                     >
                       <span>View All</span>
                       <ChevronRight className="w-4 h-4" />
                     </button>
                   </div>
 
-                  <div className="overflow-x-auto overflow-y-auto max-h-[420px] pr-1">
-                    <table className="w-full text-left border-collapse text-sm">
-                      <thead className="sticky top-0 bg-white z-10">
-                        <tr className="border-b border-slate-100 text-xs text-slate-400 uppercase tracking-wider">
-                          <th className="py-3 px-4 font-bold">ID / Type</th>
-                          <th className="py-3 px-4 font-bold">Reporter</th>
-                          <th className="py-3 px-4 font-bold">Location</th>
-                          <th className="py-3 px-4 font-bold">Status</th>
-                          <th className="py-3 px-4 font-bold">Responder</th>
-                          <th className="py-3 px-4 font-bold text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {incidents.map((inc) => {
-                          const statusLower = (inc.status || 'pending').toLowerCase();
-                          return (
-                            <tr key={inc.incident_id} className="hover:bg-slate-50/80 transition">
-                              <td className="py-3.5 px-4">
-                                <span className="font-bold text-slate-900">#{inc.incident_id}</span>
-                                <span className="block text-xs text-indigo-600 font-semibold">{inc.incident_name}</span>
-                              </td>
-                              <td className="py-3.5 px-4 text-xs font-medium text-slate-700">{inc.reporter_name}</td>
-                              <td className="py-3.5 px-4 text-xs text-slate-600">{inc.location_description || 'Campus'}</td>
-                              <td className="py-3.5 px-4">
-                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-extrabold capitalize ${
-                                  statusLower === 'pending' ? 'bg-amber-100 text-amber-700' :
-                                  statusLower === 'active' || statusLower === 'critical' ? 'bg-rose-100 text-rose-700' :
+                  {loading ? (
+                    <div className="py-12 text-center text-slate-400 text-sm">Loading incident reports...</div>
+                  ) : prioritizedAndFilteredIncidents.length === 0 ? (
+                    <div className="py-12 text-center text-slate-400 text-sm">No active incident reports recorded.</div>
+                  ) : (
+                    <div className="space-y-3 overflow-y-auto max-h-[420px] pr-1">
+                      {prioritizedAndFilteredIncidents.map((inc) => {
+                        const statusLower = (inc.status || 'pending').toLowerCase();
+                        return (
+                          <div key={inc.incident_id} className="p-4 rounded-2xl bg-slate-50 border border-slate-200/60 flex items-center justify-between gap-4">
+                            <div className="min-w-0">
+                              <div className="flex items-center space-x-2 mb-1">
+                                <span className="text-xs font-black text-slate-900">#{inc.incident_id}</span>
+                                <span className="text-xs font-bold text-slate-700">{inc.incident_name}</span>
+                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${
+                                  statusLower === 'pending' ? 'bg-rose-100 text-rose-700' :
+                                  statusLower === 'active' ? 'bg-amber-100 text-amber-700' :
                                   ['assigned', 'accepted', 'responding'].includes(statusLower) ? 'bg-indigo-100 text-indigo-700' :
                                   'bg-emerald-100 text-emerald-700'
                                 }`}>
                                   {inc.status || 'Pending'}
                                 </span>
-                              </td>
-                              <td className="py-3.5 px-4 text-xs font-semibold text-slate-700">
-                                {inc.assigned_responder_name || <span className="text-slate-400 italic">Unassigned</span>}
-                              </td>
-                              <td className="py-3.5 px-4 text-right">
-                                <button
-                                  onClick={() => openManageModal(inc)}
-                                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl text-xs font-bold transition cursor-pointer"
-                                >
-                                  Manage
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        {incidents.length === 0 && (
-                          <tr>
-                            <td colSpan={6} className="py-8 text-center text-sm text-slate-400">
-                              {loading ? 'Loading incidents...' : 'No incident reports found.'}
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                              </div>
+                              <p className="text-xs text-slate-500 truncate">
+                                📍 {inc.location_description || 'Campus'} • Reported by {inc.reporter_name}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => openManageModal(inc)}
+                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition shadow-sm shrink-0 cursor-pointer"
+                            >
+                              Manage
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
-                {/* RIGHT: LIVE EARTHQUAKE MONITORING CARD (1 COLUMN WIDE, SCROLLABLE) */}
-                <div className="bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 flex flex-col">
-                  <div className="flex items-start justify-between gap-2 mb-4">
-                    <div className="flex items-center space-x-3">
-                      <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl shrink-0">
-                        <MapPin className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h2 className="text-base font-bold text-slate-900">Regional Earthquake Monitoring</h2>
-                        <p className="text-xs text-slate-500">Seismic activity near CDO</p>
-                      </div>
+                {/* Regional Earthquakes Panel */}
+                <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 flex flex-col">
+                  <div className="flex items-center justify-between mb-4 gap-3">
+                    <div className="min-w-0">
+                      <h3 className="text-lg font-extrabold text-slate-900">Regional Earthquakes</h3>
+                      <p className="text-xs text-slate-500 font-medium">USGS / PHIVOLCS (300 km radius)</p>
                     </div>
-                    <button
-                      onClick={() => void loadEarthquakes()}
-                      disabled={loadingEarthquakes}
-                      className="text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-xl transition cursor-pointer shrink-0"
-                    >
-                      {loadingEarthquakes ? '...' : 'Refresh'}
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleTestEarthquake}
+                        className="flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-extrabold transition shadow-sm cursor-pointer"
+                        title="Trigger a local test earthquake alert"
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        Test Alert
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void loadEarthquakes()}
+                        disabled={loadingEarthquakes}
+                        className="p-2 text-slate-400 hover:text-slate-600 rounded-xl transition cursor-pointer disabled:opacity-50"
+                        title="Refresh earthquakes"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${loadingEarthquakes ? 'animate-spin' : ''}`} />
+                      </button>
+                    </div>
                   </div>
 
-                  {loadingEarthquakes && earthquakes.length === 0 ? (
-                    <div className="py-8 text-center text-sm text-slate-400">Loading seismic activity...</div>
-                  ) : earthquakes.length > 0 ? (
+                  {earthquakes.length === 0 ? (
+                    <div className="py-12 text-center text-slate-400 text-sm">No recent regional earthquakes detected.</div>
+                  ) : (
                     <div className="space-y-3 overflow-y-auto max-h-[420px] pr-1">
                       {earthquakes.map((eq) => (
                         <div
                           key={eq.id}
                           onClick={() => setSelectedEarthquakeForDetails(eq)}
-                          className="p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-300 hover:shadow-md transition cursor-pointer flex flex-col justify-between space-y-2 group"
+                          className="p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200/60 transition cursor-pointer"
                         >
-                          <div className="flex items-center justify-between">
-                            <span className={`text-xs font-extrabold px-2.5 py-0.5 rounded-full ${eq.magnitude >= 5 ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className={`text-xs font-black px-2 py-0.5 rounded-md ${
+                              eq.magnitude >= 5.0 ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'
+                            }`}>
                               Mag {eq.magnitude.toFixed(1)}
                             </span>
-                            <span className="text-[11px] font-mono text-slate-400">{Math.round(eq.distance_from_cdo_km)} km from CDO</span>
+                            <span className="text-[10px] text-slate-400 font-bold">{eq.distance_from_cdo_km} km from CDO</span>
                           </div>
-                          <p className="text-xs font-bold text-slate-800 group-hover:text-indigo-600 transition-colors truncate">{eq.place}</p>
-                          <p className="text-[11px] text-slate-500">Depth: {eq.depth_km} km • {new Date(eq.time).toLocaleTimeString()}</p>
+                          <h4 className="text-xs font-bold text-slate-900 truncate mb-1">{eq.place}</h4>
+                          <div className="flex items-center justify-between text-[10px] text-slate-500">
+                            <span>Depth: {eq.depth_km} km</span>
+                            <span className="uppercase font-bold text-indigo-600">{eq.source}</span>
+                          </div>
                         </div>
                       ))}
-                    </div>
-                  ) : (
-                    <div className="py-8 text-center text-sm text-slate-500 bg-slate-50 rounded-2xl border border-slate-100">
-                      No recent significant seismic events reported in the region.
                     </div>
                   )}
                 </div>
@@ -1023,261 +1254,218 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
             </div>
           )}
 
-          {/* INCIDENT REPORTS TAB */}
           {currentTab === 'assignments' && (
-            <div className="bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 space-y-6">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 space-y-6">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">All Incident Reports</h2>
-                  <p className="text-xs text-slate-500">Filter, dispatch responders, and manage campus emergency cases</p>
+                  <h3 className="text-lg font-extrabold text-slate-900">Incident Reports Roster</h3>
+                  <p className="text-xs text-slate-500">Manage and dispatch responders to reported campus incidents</p>
                 </div>
-
-                <div className="flex items-center space-x-2 overflow-x-auto pb-2 md:pb-0">
-                  {(['all', 'pending', 'active', 'assigned', 'resolved'] as const).map((st) => (
-                    <button
-                      key={st}
-                      onClick={() => setFeedStatusFilter(st)}
-                      className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold capitalize transition cursor-pointer shrink-0 ${
-                        feedStatusFilter === st
-                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      {st}
-                    </button>
-                  ))}
+                <div className="flex items-center space-x-2 w-full sm:w-auto">
+                  <div className="relative flex-1 sm:w-64">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                    <input
+                      type="text"
+                      placeholder="Search incidents..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {prioritizedAndFilteredIncidents.map((inc) => {
-                  const statusLower = (inc.status || 'pending').toLowerCase();
-                  return (
-                    <div key={inc.incident_id} className="bg-slate-50 rounded-2xl p-5 border border-slate-200/80 flex flex-col justify-between space-y-4 shadow-sm hover:shadow-md transition">
+              {prioritizedAndFilteredIncidents.length === 0 ? (
+                <div className="py-16 text-center text-slate-400 text-sm">No operational incidents match your search criteria.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-xs font-extrabold text-slate-400 uppercase tracking-wider">
+                        <th className="py-3 px-4">ID</th>
+                        <th className="py-3 px-4">Incident Type</th>
+                        <th className="py-3 px-4">Location</th>
+                        <th className="py-3 px-4">Reporter</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4">Assigned Responder</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-xs font-medium text-slate-700">
+                      {prioritizedAndFilteredIncidents.map((inc) => {
+                        const statusLower = (inc.status || 'pending').toLowerCase();
+                        return (
+                          <tr key={inc.incident_id} className="hover:bg-slate-50 transition">
+                            <td className="py-4 px-4 font-black text-slate-900">#{inc.incident_id}</td>
+                            <td className="py-4 px-4 font-bold text-slate-900">{inc.incident_name}</td>
+                            <td className="py-4 px-4">{inc.location_description || 'Campus'}</td>
+                            <td className="py-4 px-4">{inc.reporter_name}</td>
+                            <td className="py-4 px-4">
+                              <span className={`px-2.5 py-1 rounded-full font-black uppercase text-[10px] ${
+                                statusLower === 'pending' ? 'bg-rose-100 text-rose-700' :
+                                statusLower === 'active' ? 'bg-amber-100 text-amber-700' :
+                                ['assigned', 'accepted', 'responding'].includes(statusLower) ? 'bg-indigo-100 text-indigo-700' :
+                                'bg-emerald-100 text-emerald-700'
+                              }`}>
+                                {inc.status || 'Pending'}
+                              </span>
+                            </td>
+                            <td className="py-4 px-4 font-bold text-indigo-600">
+                              {inc.assigned_responder_name || 'Unassigned'}
+                            </td>
+                            <td className="py-4 px-4 text-right">
+                              <button
+                                onClick={() => openManageModal(inc)}
+                                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition shadow-sm cursor-pointer"
+                              >
+                                Manage
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {currentTab === 'accepted' && (
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 space-y-6">
+              <div>
+                <h3 className="text-lg font-extrabold text-slate-900">Assigned & In-Progress Cases</h3>
+                <p className="text-xs text-slate-500">Monitor active emergency deployments across the university</p>
+              </div>
+
+              {acceptedIncidents.length === 0 ? (
+                <div className="py-16 text-center text-slate-400 text-sm">No currently active or assigned cases.</div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {acceptedIncidents.map((inc) => (
+                    <div key={inc.incident_id} className="p-5 rounded-3xl bg-slate-50 border border-slate-200/80 space-y-4 flex flex-col justify-between">
                       <div className="space-y-2">
                         <div className="flex items-center justify-between">
-                          <span className="font-extrabold text-slate-900 text-sm">Incident #{inc.incident_id}</span>
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-extrabold capitalize ${
-                            statusLower === 'pending' ? 'bg-amber-100 text-amber-700' :
-                            statusLower === 'active' || statusLower === 'critical' ? 'bg-rose-100 text-rose-700' :
-                            ['assigned', 'accepted', 'responding'].includes(statusLower) ? 'bg-indigo-100 text-indigo-700' :
-                            'bg-emerald-100 text-emerald-700'
-                          }`}>
-                            {inc.status || 'Pending'}
+                          <span className="text-xs font-black text-slate-900">Incident #{inc.incident_id}</span>
+                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                            {inc.status}
                           </span>
                         </div>
-
-                        <p className="text-sm font-bold text-indigo-600">{inc.incident_name}</p>
-                        <p className="text-xs text-slate-600">{inc.description || 'No detailed description provided.'}</p>
-                        
-                        <div className="pt-2 border-t border-slate-200/60 space-y-1 text-xs text-slate-500">
-                          <p><strong className="text-slate-700">Reporter:</strong> {inc.reporter_name}</p>
-                          <p><strong className="text-slate-700">Location:</strong> {inc.location_description || 'Campus Area'}</p>
-                          <p><strong className="text-slate-700">Assigned:</strong> {inc.assigned_responder_name || <span className="text-slate-400 italic">None</span>}</p>
-                        </div>
+                        <h4 className="text-sm font-black text-slate-900">{inc.incident_name}</h4>
+                        <p className="text-xs text-slate-600">📍 {inc.location_description || 'Campus'}</p>
+                        <p className="text-xs font-semibold text-indigo-600">Responder: {inc.assigned_responder_name || 'Unassigned'}</p>
                       </div>
-
                       <button
                         onClick={() => openManageModal(inc)}
-                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
+                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
                       >
-                        Manage & Dispatch
+                        Update Status / Responder
                       </button>
                     </div>
-                  );
-                })}
-
-                {prioritizedAndFilteredIncidents.length === 0 && (
-                  <div className="col-span-full py-12 text-center text-slate-400 text-sm">
-                    No incident reports match your filter criteria.
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ASSIGNED CASES TAB */}
-          {currentTab === 'accepted' && (
-            <div className="bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 space-y-6">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">Active & Assigned Cases</h2>
-                <p className="text-xs text-slate-500">Monitor ongoing medical dispatches and active responder deployments</p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {acceptedIncidents.map((inc) => (
-                  <div key={inc.incident_id} className="bg-slate-50 rounded-2xl p-5 border border-indigo-100 flex flex-col justify-between space-y-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="font-extrabold text-slate-900 text-sm">Case #{inc.incident_id}</span>
-                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-indigo-100 text-indigo-700 capitalize">
-                          {inc.status || 'Assigned'}
-                        </span>
-                      </div>
-                      <p className="text-sm font-bold text-indigo-600">{inc.incident_name}</p>
-                      <p className="text-xs text-slate-600">{inc.location_description || 'Campus'}</p>
-                      <div className="text-xs text-slate-500 pt-2 border-t border-slate-200">
-                        <p><strong className="text-slate-700">Responder:</strong> {inc.assigned_responder_name || 'Assigned'}</p>
-                        <p><strong className="text-slate-700">Reporter:</strong> {inc.reporter_name}</p>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => openManageModal(inc)}
-                      className="w-full py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold transition cursor-pointer"
-                    >
-                      Update Case Status
-                    </button>
-                  </div>
-                ))}
-
-                {acceptedIncidents.length === 0 && (
-                  <div className="col-span-full py-12 text-center text-slate-400 text-sm">
-                    No active or assigned cases currently in progress.
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* STAFF ROSTER TAB */}
-          {currentTab === 'roster' && (
-            <div className="bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 space-y-6">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900">Clinic Staff & Responder Roster</h2>
-                  <p className="text-xs text-slate-500">Manage medical personnel availability and contact directory</p>
+                  ))}
                 </div>
+              )}
+            </div>
+          )}
 
-                <div className="flex items-center space-x-2 overflow-x-auto pb-2 md:pb-0">
-                  {(['all', 'available', 'busy', 'offline'] as const).map((st) => (
+          {currentTab === 'roster' && (
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 space-y-6">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-extrabold text-slate-900">Staff & Responder Roster</h3>
+                  <p className="text-xs text-slate-500">View real-time availability of medical staff and emergency responders</p>
+                </div>
+                <div className="flex items-center space-x-2">
+                  {(['all', 'available', 'busy', 'offline'] as const).map((filterOpt) => (
                     <button
-                      key={st}
-                      onClick={() => setRosterFilter(st)}
-                      className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold capitalize transition cursor-pointer shrink-0 ${
-                        rosterFilter === st
-                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      key={filterOpt}
+                      onClick={() => setRosterFilter(filterOpt)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold capitalize transition cursor-pointer ${
+                        rosterFilter === filterOpt ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
                     >
-                      {st}
+                      {filterOpt}
                     </button>
                   ))}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredResponders.map((resp) => {
-                  const rid = resp.responder_id ?? resp.id;
-                  const status = (resp.availability_status || 'offline').toLowerCase();
-                  return (
-                    <div key={rid} className="bg-slate-50 rounded-2xl p-5 border border-slate-200/80 flex flex-col justify-between space-y-4">
-                      <div className="space-y-3">
+              {filteredResponders.length === 0 ? (
+                <div className="py-16 text-center text-slate-400 text-sm">No responders found for this status filter.</div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredResponders.map((resp) => {
+                    const status = (resp.availability_status || 'offline').toLowerCase();
+                    return (
+                      <div
+                        key={resp.responder_id ?? resp.id}
+                        onClick={() => setSelectedResponderForDetails(resp)}
+                        className="p-5 rounded-3xl bg-slate-50 hover:bg-slate-100 border border-slate-200/80 transition cursor-pointer space-y-3"
+                      >
                         <div className="flex items-center justify-between">
-                          <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center text-sm">
-                            {resp.name.split(/\s+/).map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-sm">
+                              {resp.name.slice(0, 2).toUpperCase()}
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-black text-slate-900">{resp.name}</h4>
+                              <span className="text-[10px] text-slate-400 font-semibold">{resp.user_type || 'Responder'}</span>
+                            </div>
                           </div>
-                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold capitalize ${
-                            status === 'available' ? 'bg-emerald-100 text-emerald-700' :
-                            status === 'busy' ? 'bg-amber-100 text-amber-700' :
-                            'bg-slate-200 text-slate-600'
-                          }`}>
-                            {resp.availability_status || 'Offline'}
-                          </span>
+                          <span className={`w-3 h-3 rounded-full ${
+                            status === 'available' ? 'bg-emerald-500' : status === 'busy' ? 'bg-amber-500' : 'bg-slate-400'
+                          }`} />
                         </div>
-
-                        <div>
-                          <p className="text-sm font-bold text-slate-900">{resp.name}</p>
-                          <p className="text-xs text-indigo-600 font-semibold">{resp.user_type || 'Medical Responder'}</p>
-                        </div>
-
-                        <div className="space-y-1 text-xs text-slate-500 pt-2 border-t border-slate-200/60">
-                          <p className="flex items-center space-x-2">
-                            <Phone className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{resp.contact_number || 'No phone listed'}</span>
-                          </p>
-                          <p className="flex items-center space-x-2">
-                            <Mail className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{resp.email || 'No email listed'}</span>
-                          </p>
+                        <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs text-slate-600 font-medium">
+                          <span>Status: <strong className="capitalize">{status}</strong></span>
+                          <span className="text-indigo-600 font-bold hover:underline">View Profile</span>
                         </div>
                       </div>
-
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => updateResponderAvailability(resp, status === 'available' ? 'offline' : 'available')}
-                          className={`flex-1 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
-                            status === 'available'
-                              ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
-                              : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                          }`}
-                        >
-                          Set {status === 'available' ? 'Offline' : 'Available'}
-                        </button>
-                        <button
-                          onClick={() => setSelectedResponderForDetails(resp)}
-                          className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl text-xs font-bold transition cursor-pointer"
-                        >
-                          View
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {filteredResponders.length === 0 && (
-                  <div className="col-span-full py-12 text-center text-slate-400 text-sm">
-                    No staff members match the selected filter.
-                  </div>
-                )}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
-          {/* SCHEDULE TAB */}
           {currentTab === 'schedule' && (
-            <div className="bg-white rounded-3xl p-6 shadow-sm border border-indigo-100 space-y-6">
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 space-y-6">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">Clinic Shift Schedule</h2>
-                <p className="text-xs text-slate-500">Upcoming medical staff duty rosters and shift assignments</p>
+                <h3 className="text-lg font-extrabold text-slate-900">Clinic Staff Schedule</h3>
+                <p className="text-xs text-slate-500">Weekly shift assignments and dispatch coordinator schedules</p>
               </div>
-
-              <div className="py-16 text-center space-y-3 bg-slate-50 rounded-2xl border border-slate-100">
-                <CalendarDays className="w-12 h-12 text-indigo-400 mx-auto" />
-                <p className="text-sm font-bold text-slate-700">Weekly Shift Calendar</p>
-                <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                  Staff shift rotations and coordinator schedules are synchronized with the university HR portal.
-                </p>
+              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200/60 text-slate-500 text-sm">
+                Schedule calendar management is fully synchronized with university HR dispatch records.
               </div>
             </div>
           )}
         </main>
       </div>
 
-      {/* MODAL: MANAGE & DISPATCH INCIDENT */}
+      {/* MODAL: MANAGE INCIDENT ASSIGNMENT */}
       {selectedIncidentForUpdate && (
-        <div className="fixed inset-0 bg-[#151130]/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-indigo-100 space-y-6 text-slate-800">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-lg w-full shadow-2xl border border-slate-200 space-y-6">
+            <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-base font-bold text-slate-900">Manage Incident #{selectedIncidentForUpdate.incident_id}</h3>
-                <p className="text-xs text-slate-500">{selectedIncidentForUpdate.incident_name}</p>
+                <h3 className="text-lg font-black text-slate-900">Manage Incident #{selectedIncidentForUpdate.incident_id}</h3>
+                <p className="text-xs text-slate-500 font-medium">{selectedIncidentForUpdate.incident_name}</p>
               </div>
               <button
                 onClick={() => setSelectedIncidentForUpdate(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Update Incident Status</label>
+              <div>
+                <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-wider mb-2">Update Status</label>
                 <select
                   id="incident-status-select"
                   defaultValue={selectedIncidentForUpdate.status || 'pending'}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="pending">Pending</option>
                   <option value="active">Active</option>
@@ -1287,35 +1475,30 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 </select>
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Assign Medical Responder</label>
+              <div>
+                <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-wider mb-2">Assign Responder</label>
                 <select
                   value={selectedResponderIdForModal}
                   onChange={(e) => setSelectedResponderIdForModal(Number(e.target.value))}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
-                  <option value={0}>-- Select Responder --</option>
-                  {responders.map((resp) => {
-                    const rid = resp.responder_id ?? resp.id;
+                  <option value={0}>Select a responder...</option>
+                  {responders.map((r) => {
+                    const rid = r.responder_id ?? r.id;
                     return (
                       <option key={rid} value={rid}>
-                        {resp.name} ({resp.availability_status || 'offline'})
+                        {r.name} ({r.availability_status})
                       </option>
                     );
                   })}
                 </select>
-              </div>
-
-              <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-100 text-xs text-indigo-900 space-y-1">
-                <p><strong>Location:</strong> {selectedIncidentForUpdate.location_description || 'Campus Area'}</p>
-                <p><strong>Reporter:</strong> {selectedIncidentForUpdate.reporter_name}</p>
               </div>
             </div>
 
             <div className="flex items-center justify-end space-x-3 pt-4 border-t border-slate-100">
               <button
                 onClick={() => setSelectedIncidentForUpdate(null)}
-                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 transition cursor-pointer"
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
               >
                 Cancel
               </button>
@@ -1326,9 +1509,9 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                   const newStatus = statusSelect ? statusSelect.value : (selectedIncidentForUpdate.status || 'pending');
                   void handleSaveIncidentAssignment(selectedIncidentForUpdate, newStatus, selectedResponderIdForModal);
                 }}
-                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition shadow-md shadow-indigo-600/30 cursor-pointer disabled:opacity-50"
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-extrabold shadow-md transition cursor-pointer disabled:opacity-50"
               >
-                {submittingAssignment ? 'Saving...' : 'Save & Dispatch'}
+                {submittingAssignment ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </div>
@@ -1337,94 +1520,57 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
       {/* MODAL: RESPONDER DETAILS */}
       {selectedResponderForDetails && (
-        <div className="fixed inset-0 bg-[#151130]/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-indigo-100 space-y-6 text-slate-800">
-            <div className="text-center space-y-2">
-              <div className="w-16 h-16 rounded-2xl bg-indigo-600 text-white font-extrabold text-xl flex items-center justify-center mx-auto shadow-lg shadow-indigo-600/30">
-                {selectedResponderForDetails.name.split(/\s+/).map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-              </div>
-              <h3 className="text-base font-bold text-slate-900">{selectedResponderForDetails.name}</h3>
-              <p className="text-xs text-indigo-600 font-semibold">{selectedResponderForDetails.user_type || 'Medical Responder'}</p>
-            </div>
-
-            <div className="space-y-2 text-xs text-slate-600 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-              <p><strong className="text-slate-800">Status:</strong> <span className="capitalize">{selectedResponderForDetails.availability_status}</span></p>
-              <p><strong className="text-slate-800">Phone:</strong> {selectedResponderForDetails.contact_number || 'N/A'}</p>
-              <p><strong className="text-slate-800">Email:</strong> {selectedResponderForDetails.email || 'N/A'}</p>
-            </div>
-
-            <button
-              onClick={() => setSelectedResponderForDetails(null)}
-              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: EARTHQUAKE DETAILS */}
-      {selectedEarthquakeForDetails && (
-        <div className="fixed inset-0 bg-[#151130]/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-indigo-100 space-y-6 text-slate-800">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl border border-slate-200 space-y-6">
+            <div className="flex items-center justify-between">
               <div className="flex items-center space-x-3">
-                <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl">
-                  <MapPin className="w-5 h-5" />
+                <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-base">
+                  {selectedResponderForDetails.name.slice(0, 2).toUpperCase()}
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">Earthquake Details</h3>
-                  <p className="text-xs text-slate-500">Seismic Event Report</p>
+                  <h3 className="text-base font-black text-slate-900">{selectedResponderForDetails.name}</h3>
+                  <span className="text-xs text-slate-400 font-semibold">{selectedResponderForDetails.user_type || 'Responder'}</span>
                 </div>
               </div>
               <button
-                onClick={() => setSelectedEarthquakeForDetails(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                onClick={() => setSelectedResponderForDetails(null)}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-4">
-              <div className="flex items-center justify-between bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                <div>
-                  <p className="text-[11px] uppercase tracking-wider font-bold text-slate-400">Magnitude</p>
-                  <p className={`text-2xl font-extrabold mt-0.5 ${selectedEarthquakeForDetails.magnitude >= 5 ? 'text-rose-600' : 'text-amber-600'}`}>
-                    {selectedEarthquakeForDetails.magnitude.toFixed(1)}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[11px] uppercase tracking-wider font-bold text-slate-400">Distance from CDO</p>
-                  <p className="text-lg font-extrabold text-slate-900 mt-0.5">{Math.round(selectedEarthquakeForDetails.distance_from_cdo_km)} km</p>
-                </div>
-              </div>
-
-              <div className="space-y-2 text-xs text-slate-700 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                <p><strong className="text-slate-900">Location / Place:</strong> {selectedEarthquakeForDetails.place}</p>
-                <p><strong className="text-slate-900">Focal Depth:</strong> {selectedEarthquakeForDetails.depth_km} km</p>
-                <p><strong className="text-slate-900">Timestamp:</strong> {new Date(selectedEarthquakeForDetails.time).toLocaleString()}</p>
-                <p><strong className="text-slate-900">Data Source:</strong> {selectedEarthquakeForDetails.source || 'USGS / PHIVOLCS Feed'}</p>
-              </div>
-
-              {selectedEarthquakeForDetails.url && (
-                <a
-                  href={selectedEarthquakeForDetails.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center space-x-2 w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold transition"
-                >
-                  <span>View Official Event Page</span>
-                  <ExternalLink className="w-4 h-4" />
-                </a>
-              )}
+            <div className="space-y-3 text-xs text-slate-600 bg-slate-50 p-4 rounded-2xl border border-slate-200/60 font-medium">
+              <p><strong>Availability:</strong> <span className="capitalize">{selectedResponderForDetails.availability_status}</span></p>
+              <p><strong>Contact Number:</strong> {selectedResponderForDetails.contact_number || 'Not provided'}</p>
+              <p><strong>Email:</strong> {selectedResponderForDetails.email || 'Not provided'}</p>
             </div>
 
-            <button
-              onClick={() => setSelectedEarthquakeForDetails(null)}
-              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer"
-            >
-              Close
-            </button>
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-xs font-bold text-slate-500">Quick Availability Change:</span>
+              <div className="flex space-x-2">
+                {['available', 'busy', 'offline'].map((stat) => (
+                  <button
+                    key={stat}
+                    onClick={() => void updateResponderAvailability(selectedResponderForDetails, stat)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize transition cursor-pointer ${
+                      selectedResponderForDetails.availability_status === stat ? 'bg-indigo-600 text-white shadow' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    {stat}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex justify-end">
+              <button
+                onClick={() => setSelectedResponderForDetails(null)}
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

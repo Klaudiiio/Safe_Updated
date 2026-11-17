@@ -128,22 +128,66 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
       const id = String(n.notification_id || n.id || index + 1);
       const isRead = readMap[id] ?? (String(n.status || '').toLowerCase() === 'read' || Boolean(n.is_read || n.read));
      
-      const title = n.title || n.notification_type || 'System Alert';
-      const message = n.message || n.content || '';
+      const incidentId = n.incident_id || n.incidentId;
+      const matchingIncident = incidents?.find(
+        (inc: any) => String(inc.id || inc.incident_id) === String(incidentId)
+      );
 
-      const timeValue = n.sent_at || n.sentAt || n.created_at;
+      // 1. Build notification title from matchingIncident.type with fallback to incident-type field
+      const title = 
+        matchingIncident?.type || 
+        matchingIncident?.incident_types?.incident_name || 
+        matchingIncident?.incident_name || 
+        n.title || 
+        'Incident';
+
+      // 2. Show reporter username using matchingIncident.reporterUsername (supplied by liveData.ts)
+      const rawReporter = 
+        matchingIncident?.reporterUsername ||
+        matchingIncident?.reporter_username ||
+        matchingIncident?.reporter_name ||
+        matchingIncident?.reporterName ||
+        matchingIncident?.username ||
+        matchingIncident?.user?.username ||
+        matchingIncident?.users?.username ||
+        n.reporter_username ||
+        n.username;
+
+      const cleanReporter = typeof rawReporter === 'string' ? rawReporter.trim() : '';
+      const lowerReporter = cleanReporter.toLowerCase();
+      const isAnonymous = 
+        !cleanReporter || 
+        lowerReporter === 'anonymous' || 
+        lowerReporter === 'none' ||
+        lowerReporter === 'admin' ||
+        /^user\s*\d*$/i.test(lowerReporter);
+
+      const reporterDisplay = isAnonymous ? 'Anonymous' : cleanReporter;
+
+      // 3. Include incident location, description, and reporter in the text
+      const description = matchingIncident?.description || n.message || n.content || 'Emergency alert reported';
+      const locationText = matchingIncident?.building || matchingIncident?.location;
+
+      const message = locationText
+        ? `${description} at ${locationText} — Submitted by ${reporterDisplay}`
+        : `${description} — Submitted by ${reporterDisplay}`;
+
+      const timeValue = n.sent_at || n.sentAt || n.created_at || matchingIncident?.reported_at;
       const time = timeValue
         ? new Date(timeValue).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         : 'Recent';
 
-      const priority = (n.priority || n.priority_level || 'urgent').toLowerCase();
+      const priority = (matchingIncident?.status === 'Active' ? 'critical' : (n.priority || n.priority_level || 'urgent')).toLowerCase();
+
+      // Link directly to Active Incidents with incident parameter query for auto-scrolling
+      const notificationPath = incidentId ? `/active-incidents?incident=${incidentId}` : '/notifications';
 
       return {
         id,
         title,
         message,
         time,
-        path: '/notifications',
+        path: notificationPath,
         isRead,
         severity: priority,
       };
@@ -723,7 +767,6 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
                       required
-                      minLength={6}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 transition-all"
                     />
                   </div>
@@ -738,7 +781,6 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       required
-                      minLength={6}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 transition-all"
                     />
                   </div>
