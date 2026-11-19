@@ -1,5 +1,9 @@
 #!/usr/bin/env python
 """Django's command-line utility for administrative tasks."""
+import truststore
+
+truststore.inject_into_ssl()
+
 import os
 import sys
 

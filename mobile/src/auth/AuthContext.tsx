@@ -21,7 +21,9 @@ import {
   type ProfileUpdatePayload,
 } from '../lib/api';
 
+
 const SESSION_KEY = 'safe-user-session';
+
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -30,6 +32,8 @@ interface AuthContextValue {
   storageError: string | null;
   supabaseSynced: boolean | null;
   syncWarning: string | null;
+  saveSession: (nextSession: AuthSession) => Promise<void>;
+  updateSession: (nextSession: AuthSession | null) => Promise<void>;
   syncProfile: () => Promise<void>;
   updateProfile: (payload: ProfileUpdatePayload) => Promise<any>;
   refreshProfile: () => Promise<void>;
@@ -40,12 +44,15 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
 }
 
+
 const AuthContext = createContext<AuthContextValue | null>(null);
+
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [storageError, setStorageError] = useState<string | null>(null);
+
 
   const signOut = useCallback(async () => {
     try {
@@ -58,6 +65,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   }, []);
 
+
   const saveSession = useCallback(async (nextSession: AuthSession) => {
     try {
       await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(nextSession));
@@ -67,6 +75,19 @@ export function AuthProvider({ children }: PropsWithChildren) {
       throw new Error('Could not securely save your session on this device. Please try again.');
     }
   }, []);
+
+
+  const updateSession = useCallback(
+    async (nextSession: AuthSession | null) => {
+      if (!nextSession) {
+        await signOut();
+        return;
+      }
+      await saveSession(nextSession);
+    },
+    [saveSession, signOut],
+  );
+
 
   useEffect(() => {
     let active = true;
@@ -85,16 +106,20 @@ export function AuthProvider({ children }: PropsWithChildren) {
     };
   }, []);
 
+
   const signIn = useCallback(async (username: string, password: string) => {
     await saveSession(await authenticate('login', { username, password }));
   }, [saveSession]);
+
 
   const signUp = useCallback(async (payload: Record<string, string>) => {
     await saveSession(await authenticate('register', payload));
   }, [saveSession]);
 
+
   const syncProfile = useCallback(async () => {
     if (!session) throw new Error('Sign in before syncing your profile.');
+
 
     const result = await syncProfileRequest(session.access);
     await saveSession({
@@ -104,8 +129,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
     });
   }, [session, saveSession]);
 
+
   const updateProfile = useCallback(async (payload: ProfileUpdatePayload) => {
     if (!session) throw new Error('Sign in before updating your profile.');
+
 
     const result = await updateProfileRequest(session.access, payload);
     await saveSession({
@@ -120,6 +147,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     return result;
   }, [session, saveSession]);
 
+
   const refreshProfile = useCallback(async () => {
     if (!session) return;
     try {
@@ -128,6 +156,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         await saveSession(res.session);
       }
       const updatedUser = res.user;
+
 
       const currentUser = session.user;
       const hasChanges =
@@ -138,7 +167,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
         updatedUser.phone_number !== currentUser.phone_number ||
         updatedUser.role !== currentUser.role;
 
+
       if (!hasChanges) return;
+
 
       await saveSession({
         ...res.session,
@@ -155,8 +186,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   }, [session, saveSession, signOut]);
 
+
   const submitIncidentReport = useCallback(async (payload: IncidentReportPayload) => {
     if (!session) throw new Error('Sign in before submitting an incident report.');
+
 
     try {
       const result = await submitIncidentReportRequest(session, payload);
@@ -170,14 +203,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   }, [session, saveSession, signOut]);
 
+
   const submitEmergencyReport = useCallback(async () => {
     if (!session) throw new Error('Sign in before submitting an emergency report.');
+
 
     const emergencyPayload: IncidentReportPayload = {
       incident_type: 'emergency',
       location: 'Building 9 3rd Floor',
       description: 'Immediate emergency needed',
     };
+
 
     try {
       const result = await submitIncidentReportRequest(session, emergencyPayload);
@@ -191,6 +227,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   }, [session, saveSession, signOut]);
 
+
   const value = useMemo(() => ({
     user: session?.user ?? null,
     session,
@@ -200,6 +237,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
     syncWarning: session?.supabase_synced === false
       ? session.sync_warning ?? 'Your account is saved in Django, but its Supabase profile could not be synchronized yet.'
       : null,
+    saveSession,
+    updateSession,
     syncProfile,
     updateProfile,
     refreshProfile,
@@ -208,10 +247,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
     signIn,
     signUp,
     signOut,
-  }), [session, loading, storageError, signIn, signUp, signOut, syncProfile, updateProfile, refreshProfile, submitIncidentReport, submitEmergencyReport]);
+  }), [session, loading, storageError, saveSession, updateSession, signIn, signUp, signOut, syncProfile, updateProfile, refreshProfile, submitIncidentReport, submitEmergencyReport]);
+
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
+
 
 export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);

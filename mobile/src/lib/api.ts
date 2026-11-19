@@ -9,6 +9,7 @@ export interface AuthUser {
   role: 'user' | 'clinic_staff' | 'admin';
 }
 
+
 export interface AuthSession {
   access: string;
   refresh: string;
@@ -18,10 +19,12 @@ export interface AuthSession {
   user: AuthUser;
 }
 
+
 export interface ProfileSyncResult {
   supabase_synced: boolean;
   sync_warning: string | null;
 }
+
 
 export interface ProfileUpdatePayload {
   name: string;
@@ -32,12 +35,14 @@ export interface ProfileUpdatePayload {
   phone_number: string;
 }
 
+
 export interface ProfileUpdateResponse {
   message: string;
   supabase_synced: boolean;
   sync_warning: string | null;
   user: AuthUser;
 }
+
 
 export interface IncidentReportResponse {
   incident_id: number;
@@ -46,11 +51,13 @@ export interface IncidentReportResponse {
   notification_sent: false;
 }
 
+
 export interface IncidentReportPayload {
   incident_type: string;
   description: string;
   location: string;
 }
+
 
 export interface IncidentHistoryItem {
   id: number | string;
@@ -61,33 +68,74 @@ export interface IncidentHistoryItem {
   reported_at: string | null;
 }
 
+
 export interface SensorDataResponse {
   temperature_c: number;
   humidity_percent?: number;
   recorded_at?: string;
 }
 
+
 export interface IncidentTypeRecord {
   incident_types_id: number;
   incident_name: string;
 }
 
+
+export type EarthquakeClassification = 'monitoring' | 'advisory' | 'earthquake_alert';
+
+
+const VALID_CLASSIFICATIONS: ReadonlySet<EarthquakeClassification> = new Set([
+  'monitoring',
+  'advisory',
+  'earthquake_alert',
+]);
+
+
+export function normalizeEarthquakeClassification(
+  value: unknown,
+): EarthquakeClassification {
+  if (typeof value === 'string' && VALID_CLASSIFICATIONS.has(value as EarthquakeClassification)) {
+    return value as EarthquakeClassification;
+  }
+  return 'monitoring';
+}
+
+
 export interface EarthquakeEvent {
   id: string;
-  magnitude: number;
+  external_event_id?: string;
+  magnitude: number | null;
   place: string;
-  time: number;
-  url: string;
-  depth_km: number;
-  distance_from_cdo_km: number;
+  time: number | string | null;
+  event_occurred_at?: string;
+  evaluated_at?: string;
+  url?: string;
+  detail_url?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  depth_km: number | null;
+  distance_from_cdo_km: number | null;
+  reported_intensity?: string | null;
+  classification?: EarthquakeClassification;
   source: string;
 }
+
 
 interface ApiErrorBody {
   detail?: unknown;
   message?: unknown;
   [key: string]: unknown;
 }
+
+
+export class ApiHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'ApiHttpError';
+  }
+}
+
 
 export class SupabaseRestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -96,14 +144,17 @@ export class SupabaseRestError extends Error {
   }
 }
 
+
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL?.replace(/\/+$/, '');
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_PUBLISHABLE_KEY = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
 
 function readableError(body: ApiErrorBody | null, fallback: string): string {
   if (!body) return fallback;
   if (typeof body.detail === 'string') return body.detail;
   if (typeof body.message === 'string') return body.message;
+
 
   const messages = Object.entries(body)
     .flatMap(([field, value]) => {
@@ -114,12 +165,26 @@ function readableError(body: ApiErrorBody | null, fallback: string): string {
         .map((entry) => `${field}: ${entry}`);
     });
 
+
   return messages.join('\n') || fallback;
 }
+
 
 async function responseBody(response: Response): Promise<unknown> {
   return response.json().catch(() => null) as Promise<unknown>;
 }
+
+
+function isUnauthorizedError(error: unknown): boolean {
+  if (error instanceof ApiHttpError || error instanceof SupabaseRestError) {
+    return error.status === 401;
+  }
+  if (error && typeof error === 'object' && 'status' in error) {
+    return (error as { status?: unknown }).status === 401;
+  }
+  return error instanceof Error && (error.message.includes('401') || error.message.includes('Unauthorized'));
+}
+
 
 export async function authenticate(
   action: 'login' | 'register',
@@ -130,6 +195,7 @@ export async function authenticate(
       'API address is not set. Set EXPO_PUBLIC_API_URL to your computer’s LAN IP, then restart Expo.',
     );
   }
+
 
   let response: Response;
   try {
@@ -145,10 +211,15 @@ export async function authenticate(
     );
   }
 
+
   const body = await responseBody(response) as (ApiErrorBody & Partial<AuthSession>) | null;
   if (!response.ok) {
-    throw new Error(readableError(body, `Authentication failed (${response.status}).`));
+    throw new ApiHttpError(
+      readableError(body, `Authentication failed (${response.status}).`),
+      response.status,
+    );
   }
+
 
   if (!body?.access || !body.refresh || !body.user) {
     throw new Error('Django returned an incomplete authentication response.');
@@ -161,10 +232,12 @@ export async function authenticate(
   } as AuthSession;
 }
 
+
 export async function syncProfile(accessToken: string): Promise<ProfileSyncResult> {
   if (!API_BASE_URL) {
     throw new Error('Django API address is not set. Check EXPO_PUBLIC_API_URL and restart Expo.');
   }
+
 
   let response: Response;
   try {
@@ -176,9 +249,13 @@ export async function syncProfile(accessToken: string): Promise<ProfileSyncResul
     throw new Error('Could not reach Django to sync your profile. Check the server and your network connection.');
   }
 
+
   const body = await responseBody(response) as (ApiErrorBody & Partial<ProfileSyncResult>) | null;
   if (!response.ok) {
-    throw new Error(readableError(body, `Profile sync failed (${response.status}).`));
+    throw new ApiHttpError(
+      readableError(body, `Profile sync failed (${response.status}).`),
+      response.status,
+    );
   }
   if (typeof body?.supabase_synced !== 'boolean') {
     throw new Error('Django returned an incomplete profile sync response.');
@@ -189,10 +266,12 @@ export async function syncProfile(accessToken: string): Promise<ProfileSyncResul
   };
 }
 
+
 export async function fetchProfile(accessToken: string): Promise<AuthUser> {
   if (!API_BASE_URL) {
     throw new Error('API address is not set. Check EXPO_PUBLIC_API_URL and restart Expo.');
   }
+
 
   let response: Response;
   try {
@@ -204,17 +283,24 @@ export async function fetchProfile(accessToken: string): Promise<AuthUser> {
     throw new Error('Could not reach Django to fetch your profile. Check your network connection.');
   }
 
+
   const body = await responseBody(response) as (ApiErrorBody & Partial<AuthUser>) | null;
   if (!response.ok) {
-    throw new Error(readableError(body as ApiErrorBody | null, `Failed to fetch profile (${response.status}).`));
+    throw new ApiHttpError(
+      readableError(body as ApiErrorBody | null, `Failed to fetch profile (${response.status}).`),
+      response.status,
+    );
   }
+
 
   if (!body?.id || !body?.username) {
     throw new Error('Django returned an incomplete profile response.');
   }
 
+
   return body as AuthUser;
 }
+
 
 export async function fetchProfileWithSession(
   session: AuthSession,
@@ -223,7 +309,7 @@ export async function fetchProfileWithSession(
     const user = await fetchProfile(session.access);
     return { user, session };
   } catch (error) {
-    if (error instanceof Error && (error.message.includes('401') || error.message.includes('Unauthorized'))) {
+    if (isUnauthorizedError(error)) {
       const refreshedSession = await refreshSupabaseSession(session);
       const user = await fetchProfile(refreshedSession.access);
       return { user, session: refreshedSession };
@@ -232,10 +318,12 @@ export async function fetchProfileWithSession(
   }
 }
 
+
 export async function updateProfile(accessToken: string, payload: ProfileUpdatePayload): Promise<ProfileUpdateResponse> {
   if (!API_BASE_URL) {
     throw new Error('Django API address is not set. Check EXPO_PUBLIC_API_URL and restart Expo.');
   }
+
 
   let response: Response;
   try {
@@ -251,20 +339,28 @@ export async function updateProfile(accessToken: string, payload: ProfileUpdateP
     throw new Error('Could not reach Django to update your profile. Check your network connection.');
   }
 
+
   const body = await responseBody(response) as (ApiErrorBody & Partial<ProfileUpdateResponse>) | null;
   if (!response.ok) {
-    throw new Error(readableError(body, `Failed to update profile credentials (${response.status}).`));
+    throw new ApiHttpError(
+      readableError(body, `Failed to update profile credentials (${response.status}).`),
+      response.status,
+    );
   }
+
 
   if (!body?.user) {
     throw new Error('Django returned an incomplete profile update response.');
   }
 
+
   return body as ProfileUpdateResponse;
 }
 
+
 export async function refreshSupabaseSession(session: AuthSession): Promise<AuthSession> {
   if (!API_BASE_URL) throw new Error('Django API address is not set. Check EXPO_PUBLIC_API_URL.');
+
 
   let refreshedResponse: Response;
   try {
@@ -281,8 +377,12 @@ export async function refreshSupabaseSession(session: AuthSession): Promise<Auth
     refresh?: string;
   }) | null;
   if (!refreshedResponse.ok || !refreshedBody?.access) {
-    throw new Error(readableError(refreshedBody, 'Your sign-in has expired. Sign in again.'));
+    throw new ApiHttpError(
+      readableError(refreshedBody, 'Your sign-in has expired. Sign in again.'),
+      refreshedResponse.status,
+    );
   }
+
 
   let tokenResponse: Response;
   try {
@@ -297,8 +397,12 @@ export async function refreshSupabaseSession(session: AuthSession): Promise<Auth
     supabase_access_token?: string;
   }) | null;
   if (!tokenResponse.ok || !tokenBody?.supabase_access_token) {
-    throw new Error(readableError(tokenBody, `Could not refresh Supabase access (${tokenResponse.status}).`));
+    throw new ApiHttpError(
+      readableError(tokenBody, `Could not refresh Supabase access (${tokenResponse.status}).`),
+      tokenResponse.status,
+    );
   }
+
 
   return {
     ...session,
@@ -308,10 +412,12 @@ export async function refreshSupabaseSession(session: AuthSession): Promise<Auth
   };
 }
 
+
 export async function fetchUserIncidents(accessToken: string): Promise<IncidentHistoryItem[]> {
   if (!API_BASE_URL) {
     throw new Error('Django API address is not set. Check EXPO_PUBLIC_API_URL.');
   }
+
 
   let response: Response;
   try {
@@ -323,13 +429,19 @@ export async function fetchUserIncidents(accessToken: string): Promise<IncidentH
     throw new Error('Could not reach Django to fetch incident history. Check your network connection.');
   }
 
+
   const body = await responseBody(response);
   if (!response.ok) {
-    throw new Error(readableError(body as ApiErrorBody | null, `Failed to fetch incident history (${response.status}).`));
+    throw new ApiHttpError(
+      readableError(body as ApiErrorBody | null, `Failed to fetch incident history (${response.status}).`),
+      response.status,
+    );
   }
+
 
   return (body as IncidentHistoryItem[]) || [];
 }
+
 
 export async function fetchUserIncidentsWithSession(
   session: AuthSession,
@@ -338,7 +450,7 @@ export async function fetchUserIncidentsWithSession(
     const incidents = await fetchUserIncidents(session.access);
     return { incidents, session };
   } catch (error) {
-    if (error instanceof Error && (error.message.includes('401') || error.message.includes('Unauthorized'))) {
+    if (isUnauthorizedError(error)) {
       const refreshedSession = await refreshSupabaseSession(session);
       const incidents = await fetchUserIncidents(refreshedSession.access);
       return { incidents, session: refreshedSession };
@@ -347,10 +459,12 @@ export async function fetchUserIncidentsWithSession(
   }
 }
 
+
 export async function fetchEarthquakes(accessToken: string): Promise<EarthquakeEvent[]> {
   if (!API_BASE_URL) {
     throw new Error('Django API address is not set. Check EXPO_PUBLIC_API_URL.');
   }
+
 
   let response: Response;
   try {
@@ -362,13 +476,27 @@ export async function fetchEarthquakes(accessToken: string): Promise<EarthquakeE
     throw new Error('Could not reach Django to fetch regional earthquake data. Check your network connection.');
   }
 
+
   const body = await responseBody(response) as (ApiErrorBody & { events?: EarthquakeEvent[] }) | null;
   if (!response.ok) {
-    throw new Error(readableError(body, `Failed to fetch earthquake feed (${response.status}).`));
+    throw new ApiHttpError(
+      readableError(body, `Failed to fetch earthquake feed (${response.status}).`),
+      response.status,
+    );
   }
 
-  return Array.isArray(body?.events) ? body.events : [];
+
+  const events = Array.isArray(body?.events) ? body.events : [];
+  return events.map((event) => ({
+    ...event,
+    classification: normalizeEarthquakeClassification(event.classification),
+    reported_intensity:
+      typeof event.reported_intensity === 'string' && event.reported_intensity.trim()
+        ? event.reported_intensity.trim()
+        : null,
+  }));
 }
+
 
 export async function fetchEarthquakesWithSession(
   session: AuthSession,
@@ -377,7 +505,7 @@ export async function fetchEarthquakesWithSession(
     const events = await fetchEarthquakes(session.access);
     return { events, session };
   } catch (error) {
-    if (error instanceof Error && (error.message.includes('401') || error.message.includes('Unauthorized'))) {
+    if (isUnauthorizedError(error)) {
       const refreshedSession = await refreshSupabaseSession(session);
       const events = await fetchEarthquakes(refreshedSession.access);
       return { events, session: refreshedSession };
@@ -385,6 +513,7 @@ export async function fetchEarthquakesWithSession(
     throw error;
   }
 }
+
 
 async function submitIncidentReportWithToken(
   session: AuthSession,
@@ -394,7 +523,9 @@ async function submitIncidentReportWithToken(
     throw new Error('Supabase client settings are missing. Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY, then restart Expo.');
   }
 
+
   const effectiveToken = session.supabase_access_token || SUPABASE_PUBLISHABLE_KEY;
+
 
   const request = async (url: string, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers);
@@ -407,9 +538,11 @@ async function submitIncidentReportWithToken(
     }
   };
 
+
   const typeUrl = `${SUPABASE_URL}/rest/v1/incident_types?select=incident_types_id,incident_name`;
   const typeResponse = await request(typeUrl);
   const typeBody = await responseBody(typeResponse);
+
 
   if (!typeResponse.ok) {
     throw new SupabaseRestError(
@@ -418,15 +551,18 @@ async function submitIncidentReportWithToken(
     );
   }
 
+
   const types = typeBody as Array<{ incident_types_id?: number; incident_name?: string }> | null;
   const matchedType = types?.find(
     (t) => t.incident_name?.trim().toLowerCase() === payload.incident_type.trim().toLowerCase()
   );
   const incidentTypeId = matchedType?.incident_types_id;
 
+
   if (typeof incidentTypeId !== 'number') {
     throw new Error(`Incident type "${payload.incident_type}" not found in Supabase.`);
   }
+
 
   const incidentBody: Record<string, unknown> = {
     incident_types_id: incidentTypeId,
@@ -434,6 +570,7 @@ async function submitIncidentReportWithToken(
     location_description: payload.location,
     user_id: session.user.id,
   };
+
 
   const createResponse = await request(`${SUPABASE_URL}/rest/v1/incident`, {
     method: 'POST',
@@ -448,13 +585,16 @@ async function submitIncidentReportWithToken(
     );
   }
 
+
   const created = (createBody as Array<Record<string, unknown>> | null)?.[0];
   const rawId = created?.incident_id ?? created?.id;
   const incidentId = Number(rawId);
 
+
   if (!Number.isSafeInteger(incidentId) || typeof (created?.status ?? 'pending') !== 'string') {
     throw new Error('Supabase did not return the saved incident confirmation.');
   }
+
 
   return {
     incident_id: incidentId,
@@ -463,6 +603,7 @@ async function submitIncidentReportWithToken(
     notification_sent: false,
   };
 }
+
 
 export async function submitIncidentReport(
   session: AuthSession,
@@ -486,10 +627,12 @@ export async function submitIncidentReport(
   }
 }
 
+
 export async function fetchLatestSensorData(): Promise<SensorDataResponse | null> {
   if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
     throw new Error('Supabase client settings are missing.');
   }
+
 
   try {
     const url = `${SUPABASE_URL}/rest/v1/safe_sensor_data?select=temperature_c,humidity_percent,recorded_at&order=recorded_at.desc&limit=1`;
@@ -502,6 +645,7 @@ export async function fetchLatestSensorData(): Promise<SensorDataResponse | null
       },
     });
 
+
     const body = await responseBody(response);
     if (!response.ok) {
       throw new SupabaseRestError(
@@ -509,6 +653,7 @@ export async function fetchLatestSensorData(): Promise<SensorDataResponse | null
         response.status,
       );
     }
+
 
     const data = body as Array<SensorDataResponse> | null;
     return data && data.length > 0 ? data[0] : null;
@@ -518,10 +663,12 @@ export async function fetchLatestSensorData(): Promise<SensorDataResponse | null
   }
 }
 
+
 export async function fetchIncidentTypes(): Promise<IncidentTypeRecord[]> {
   if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
     throw new Error('Supabase client settings are missing.');
   }
+
 
   try {
     const response = await fetch(`${SUPABASE_URL}/rest/v1/incident_types?select=incident_types_id,incident_name`, {
@@ -533,6 +680,7 @@ export async function fetchIncidentTypes(): Promise<IncidentTypeRecord[]> {
       },
     });
 
+
     const body = await responseBody(response);
     if (!response.ok) {
       throw new SupabaseRestError(
@@ -540,6 +688,7 @@ export async function fetchIncidentTypes(): Promise<IncidentTypeRecord[]> {
         response.status,
       );
     }
+
 
     return (body as IncidentTypeRecord[]) || [];
   } catch (error) {

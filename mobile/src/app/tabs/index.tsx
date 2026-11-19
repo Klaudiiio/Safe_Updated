@@ -43,7 +43,13 @@ import {
   fetchIncidentTypes,
   fetchEarthquakesWithSession,
   EarthquakeEvent,
+  EarthquakeClassification,
 } from '../../lib/api';
+
+const EARTHQUAKE_POLL_INTERVAL_MS = (() => {
+  const configured = Number(process.env.EXPO_PUBLIC_EARTHQUAKE_POLL_MS);
+  return Number.isFinite(configured) && configured >= 1000 ? configured : 10_000;
+})();
 
 interface IncidentType {
   id: string;
@@ -62,8 +68,32 @@ const commonIncidentsGrid = [
   { id: 'dehydration', title: 'Dehydration', icon: GlassWater, label: 'Mild Dehydration' },
 ];
 
+function getEventTimestampMs(eq: EarthquakeEvent): number {
+  if (typeof eq.time === 'number' && Number.isFinite(eq.time)) return eq.time;
+  if (typeof eq.time === 'string') {
+    const parsed = Date.parse(eq.time);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (eq.event_occurred_at) {
+    const parsed = Date.parse(eq.event_occurred_at);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function formatClassificationLabel(classification?: EarthquakeClassification): string {
+  switch (classification) {
+    case 'earthquake_alert':
+      return 'Earthquake Alert';
+    case 'advisory':
+      return 'Advisory';
+    default:
+      return 'Monitoring';
+  }
+}
+
 export default function HomeScreen() {
-  const { session, submitIncidentReport } = useAuth();
+  const { session, submitIncidentReport, updateSession } = useAuth();
   const { isDark } = useTheme();
 
   const [now, setNow] = useState(() => new Date());
@@ -147,6 +177,16 @@ export default function HomeScreen() {
         const res = await fetchEarthquakesWithSession(session);
         const events = res.events || [];
         setEarthquakes(events);
+
+        if (
+          res.session &&
+          updateSession &&
+          (res.session.access !== session.access ||
+            res.session.refresh !== session.refresh ||
+            res.session.supabase_access_token !== session.supabase_access_token)
+        ) {
+          await updateSession(res.session);
+        }
       } catch (err) {
         console.error('Failed to load earthquake feed:', err);
       }
@@ -157,27 +197,29 @@ export default function HomeScreen() {
     loadEarthquakeFeed();
 
     const sensorInterval = setInterval(loadSensorTemperature, 10000);
-    const earthquakeInterval = setInterval(loadEarthquakeFeed, 30 * 60 * 1000);
+    const earthquakeInterval = setInterval(loadEarthquakeFeed, EARTHQUAKE_POLL_INTERVAL_MS);
 
     return () => {
       clearInterval(timer);
       clearInterval(sensorInterval);
       clearInterval(earthquakeInterval);
     };
-  }, [session]);
+  }, [session, updateSession]);
 
   const ONE_DAY_MS = 24 * 60 * 60 * 1000;
   const currentTime = new Date().getTime();
 
   const activeEarthquakeAlerts = earthquakes.filter((eq) => {
-    const isWithin24Hours = currentTime - eq.time <= ONE_DAY_MS;
-    const meetsCriteria = eq.magnitude >= 4.0 || eq.distance_from_cdo_km <= 300;
+    const eventMs = getEventTimestampMs(eq);
+    const isWithin24Hours = eventMs > 0 ? currentTime - eventMs <= ONE_DAY_MS : true;
+    const isAlertClassification = eq.classification === 'earthquake_alert';
     const notDismissed = !dismissedQuakeIds.includes(eq.id);
 
-    return isWithin24Hours && meetsCriteria && notDismissed;
+    return isWithin24Hours && isAlertClassification && notDismissed;
   });
 
   const latestAlert = activeEarthquakeAlerts.length > 0 ? activeEarthquakeAlerts[0] : null;
+  const reportUrl = latestAlert?.url || latestAlert?.detail_url || '';
 
   // Effect to play sound once when latestAlert changes and has not yet been played
   useEffect(() => {
@@ -292,13 +334,21 @@ export default function HomeScreen() {
                   <AlertTriangle size={42} color="#EF4444" />
                 </View>
 
+                <Text style={styles.quakeClassificationBadge}>
+                  {formatClassificationLabel(latestAlert.classification).toUpperCase()}
+                </Text>
+
                 <Text style={styles.quakeModalTitle}>EARTHQUAKE ALERT!</Text>
-                
+
                 <Text style={styles.quakeMagnitudeText}>
-                  Mag {latestAlert.magnitude.toFixed(1)} — {latestAlert.place}
+                  {latestAlert.magnitude !== null ? `Mag ${latestAlert.magnitude.toFixed(1)} — ` : ''}
+                  {latestAlert.place}
                 </Text>
                 <Text style={styles.quakeMetaText}>
-                  {latestAlert.distance_from_cdo_km} km from CDO | Depth: {latestAlert.depth_km} km
+                  {latestAlert.distance_from_cdo_km !== null ? `${latestAlert.distance_from_cdo_km} km from USTP CDO` : 'PHIVOLCS Bulletin'}
+                  {' | Depth: '}
+                  {latestAlert.depth_km !== null ? `${latestAlert.depth_km} km` : '—'}
+                  {latestAlert.reported_intensity ? ` | Intensity ${latestAlert.reported_intensity}` : ''}
                 </Text>
 
                 <View style={styles.quakeModalDivider} />
@@ -310,12 +360,12 @@ export default function HomeScreen() {
                   </Text>
                 </View>
 
-                {latestAlert.url ? (
+                {reportUrl ? (
                   <TouchableOpacity
                     style={styles.quakeLinkBtn}
-                    onPress={() => Linking.openURL(latestAlert.url)}
+                    onPress={() => Linking.openURL(reportUrl)}
                   >
-                    <Text style={styles.quakeLinkText}>View USGS / PHIVOLCS Report</Text>
+                    <Text style={styles.quakeLinkText}>View PHIVOLCS Report</Text>
                     <ExternalLink size={12} color="#60A5FA" />
                   </TouchableOpacity>
                 ) : null}
@@ -644,6 +694,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 16,
   },
+  quakeClassificationBadge: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FBBF24',
+    backgroundColor: 'rgba(127, 29, 29, 0.75)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    letterSpacing: 0.8,
+    marginBottom: 6,
+  },
   quakeModalTitle: {
     fontSize: 22,
     fontWeight: '900',
@@ -797,12 +858,12 @@ const styles = StyleSheet.create({
   refDetailsContainer: { width: '100%', gap: 14, marginBottom: 22 },
   refRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   refIconBox: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
-  refTextGroup: { flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  refLabelText: { color: '#64748b', fontSize: 12, fontWeight: '500' },
-  refValueText: { color: '#0f172a', fontSize: 14, fontWeight: '700', maxWidth: '65%', textAlign: 'right' },
-  statusBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fee2e2', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, gap: 5 },
+  refTextGroup: { flex: 1 },
+  refLabelText: { color: '#64748b', fontSize: 11, fontWeight: '600', textTransform: 'uppercase' },
+  refValueText: { color: '#0f172a', fontSize: 14, fontWeight: '700' },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fef2f2', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, alignSelf: 'flex-start', marginTop: 2 },
   statusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#ef4444' },
-  statusBadgeText: { color: '#ef4444', fontSize: 12, fontWeight: '700' },
-  refButton: { width: '100%', minHeight: 50, borderRadius: 25, backgroundColor: '#2563eb', alignItems: 'center', justifyContent: 'center', shadowColor: '#2563eb', shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
-  refButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
+  statusBadgeText: { color: '#dc2626', fontSize: 12, fontWeight: '700' },
+  refButton: { width: '100%', backgroundColor: '#0f172a', paddingVertical: 14, borderRadius: 16, alignItems: 'center' },
+  refButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '700' },
 });

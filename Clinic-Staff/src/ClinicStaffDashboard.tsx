@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
+import { supabase } from './services/supabaseClient';
 import {
   Activity,
   Bell,
@@ -46,6 +47,7 @@ interface IncidentReport {
 }
 
 interface Responder {
+  responders_id?: number;
   responder_id?: number;
   id?: number;
   name: string;
@@ -65,18 +67,105 @@ interface NotificationItem {
   incidentId?: number;
 }
 
+export type EarthquakeClassification = 'monitoring' | 'advisory' | 'earthquake_alert';
+
 interface EarthquakeEvent {
   id: string;
-  magnitude: number;
+  external_event_id?: string;
+  magnitude: number | null;
   place: string;
-  time: number;
-  url: string;
-  depth_km: number;
+  time: number | string;
+  event_occurred_at?: string;
+  evaluated_at?: string;
+  url?: string;
+  depth_km: number | null;
   distance_from_cdo_km: number;
+  reported_intensity?: string | null;
+  classification?: EarthquakeClassification;
   source: string;
 }
 
+function getEventTimestampMs(eq: EarthquakeEvent): number {
+  if (typeof eq.time === 'number' && Number.isFinite(eq.time)) return eq.time;
+  if (typeof eq.time === 'string') {
+    const parsed = Date.parse(eq.time);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (eq.event_occurred_at) {
+    const parsed = Date.parse(eq.event_occurred_at);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function formatClassificationLabel(classification?: EarthquakeClassification): string {
+  switch (classification) {
+    case 'earthquake_alert':
+      return 'Earthquake Alert';
+    case 'advisory':
+      return 'Advisory';
+    default:
+      return 'Monitoring · Recorded';
+  }
+}
+
+function formatClassificationNote(classification?: EarthquakeClassification): string {
+  switch (classification) {
+    case 'earthquake_alert':
+      return 'Meets alert threshold';
+    case 'advisory':
+      return 'Advisory / below-alert threshold';
+    default:
+      return 'Recorded / below-alert threshold';
+  }
+}
+
+function getClassificationBadgeStyle(classification?: EarthquakeClassification): string {
+  switch (classification) {
+    case 'earthquake_alert':
+      return 'bg-rose-100 text-rose-700 border border-rose-200';
+    case 'advisory':
+      return 'bg-amber-100 text-amber-800 border border-amber-200';
+    default:
+      return 'bg-slate-200/80 text-slate-700 border border-slate-300';
+  }
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/auth';
+
+async function refreshClinicStaffAccessToken(): Promise<string> {
+  const refreshToken = localStorage.getItem('clinic_staff_refresh_token');
+
+  if (!refreshToken) {
+    throw new Error('Session expired. Please sign in again.');
+  }
+
+  const response = await fetch(`${API_BASE_URL}/token/refresh/`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      refresh: refreshToken,
+    }),
+  });
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok || !data?.access) {
+    throw new Error('Your session has expired. Please sign in again.');
+  }
+
+  localStorage.setItem('clinic_staff_access_token', data.access);
+
+  // Save a rotated refresh token if Django provides one.
+  if (data.refresh) {
+    localStorage.setItem('clinic_staff_refresh_token', data.refresh);
+  }
+
+  return data.access;
+}
+
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.replace(/\/+$/, '');
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
@@ -156,6 +245,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const [incidents, setIncidents] = useState<IncidentReport[]>([]);
   const [responders, setResponders] = useState<Responder[]>([]);
   const [earthquakes, setEarthquakes] = useState<EarthquakeEvent[]>([]);
+  const [earthquakeError, setEarthquakeError] = useState('');
   const [dismissedQuakeIds, setDismissedQuakeIds] = useState<string[]>([]);
 
   // Audio alert state. The first normal interaction unlocks future sound playback
@@ -240,16 +330,36 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       setResponders(rawResponders || []);
 
       const assignmentMap: Record<number, number> = {};
+
       try {
-        const notifAssignments = await supabaseRequest('responder_notification?select=incident_id,responder_id');
-        if (Array.isArray(notifAssignments)) {
-          notifAssignments.forEach((n: any) => {
-            if (n.incident_id && n.responder_id) {
-              assignmentMap[n.incident_id] = n.responder_id;
-            }
-          });
-        }
-      } catch {}
+        const notifAssignments = await supabaseRequest(
+          'responder_notification?select=notification_id,responders_id'
+        );
+
+        const notificationRecords = await supabaseRequest(
+          'notification?select=notification_id,incident_id'
+        );
+
+        const notificationIncidentMap: Record<number, number> = {};
+
+        notificationRecords.forEach((notification: any) => {
+          if (notification.notification_id && notification.incident_id) {
+            notificationIncidentMap[notification.notification_id] =
+              notification.incident_id;
+          }
+        });
+
+        notifAssignments.forEach((assignment: any) => {
+          const incidentId =
+            notificationIncidentMap[assignment.notification_id];
+
+          if (incidentId && assignment.responders_id) {
+            assignmentMap[incidentId] = assignment.responders_id;
+          }
+        });
+      } catch (err) {
+        console.error('Failed to load incident assignments:', err);
+      }
 
       const usernameMap: Record<number, string> = {};
       try {
@@ -275,9 +385,13 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       }
 
       const responderMap: Record<number, string> = {};
+
       (rawResponders || []).forEach((resp: any) => {
-        const rid = resp.responder_id ?? resp.id;
-        if (rid) responderMap[rid] = resp.name;
+        const rid = resp.responders_id ?? resp.responder_id ?? resp.id;
+
+        if (rid) {
+          responderMap[rid] = resp.name;
+        }
       });
 
       const formattedIncidents: IncidentReport[] = (rawIncidents || []).map((row: any) => {
@@ -306,48 +420,159 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }
   }, []);
 
+  // Supabase Realtime Subscription for instant Incident Feed updates
+  useEffect(() => {
+    console.log('Connecting to Supabase Realtime...');
+
+    const incidentChannel = supabase
+      .channel('incident-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'incident',
+        },
+        (payload) => {
+          console.log('Incident table changed:', payload);
+          void loadData();
+        }
+      )
+      .subscribe((status, error) => {
+        console.log('Supabase Realtime status:', status);
+
+        if (error) {
+          console.error('Supabase Realtime error:', error);
+        }
+      });
+
+    return () => {
+      console.log('Cleaning up Supabase Realtime subscription...');
+      void supabase.removeChannel(incidentChannel);
+    };
+  }, [loadData]);
+
   const loadEarthquakes = useCallback(async (showLoading = true) => {
     if (showLoading) setLoadingEarthquakes(true);
+
     try {
-      const token = localStorage.getItem('clinic_staff_access_token');
-      const res = await fetch(`${API_BASE_URL}/earthquakes/`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (res.ok) {
-        const data = await res.json();
-        // Keep locally generated test events visible while real earthquake data refreshes.
-        setEarthquakes((previous) => [
-          ...(data.events || []),
-          ...previous.filter((event) => event.source === 'Simulation Test'),
-        ]);
+      let token = localStorage.getItem('clinic_staff_access_token');
+
+      if (!token) {
+        throw new Error(
+          'Authentication token missing. Please sign in again.'
+        );
       }
+
+      const makeRequest = (accessToken: string) => {
+        return fetch(`${API_BASE_URL}/earthquakes/`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+      };
+
+      // First attempt using the existing access token.
+      let res = await makeRequest(token);
+
+      // If Django rejects the token, refresh it and retry.
+      if (res.status === 401) {
+        token = await refreshClinicStaffAccessToken();
+        res = await makeRequest(token);
+      }
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+
+        throw new Error(
+          errorData?.detail ||
+          errorData?.error ||
+          `Failed to load earthquake feed (HTTP ${res.status}).`
+        );
+      }
+
+      const data = await res.json();
+      setEarthquakeError('');
+
+      // Preserve locally generated simulation events.
+      setEarthquakes((previous) => [
+        ...(data.events || []),
+        ...previous.filter(
+          (event) => event.source === 'Simulation Test'
+        ),
+      ]);
     } catch (err) {
-      console.error('Failed to load earthquake feed:', err);
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Failed to load earthquake feed.';
+      console.error('Failed to load earthquake feed:', message);
+      setEarthquakeError(message);
     } finally {
-      if (showLoading) setLoadingEarthquakes(false);
+      if (showLoading) {
+        setLoadingEarthquakes(false);
+      }
     }
   }, []);
 
   // Add a local-only earthquake event to test the existing alert modal and audio.
   // This does not call the backend or create a real earthquake record.
-  const handleTestEarthquake = useCallback(() => {
-    const testId = `manual-test-${Date.now()}`;
-    const testEarthquake: EarthquakeEvent = {
-      id: testId,
-      magnitude: 6.2,
-      place: 'Test Seismic Zone, Philippines',
-      time: Date.now(),
-      url: 'https://earthquake.usgs.gov/',
-      depth_km: 15,
-      distance_from_cdo_km: 20,
-      source: 'Simulation Test',
-    };
+  const handleTestEarthquake = useCallback(async () => {
+    setError('');
+    try {
+      let token = localStorage.getItem('clinic_staff_access_token');
+      if (!token) {
+        throw new Error('Authentication token missing. Please sign in again.');
+      }
 
-    setDismissedQuakeIds((previous) => previous.filter((id) => id !== testId));
-    setEarthquakes((previous) => [
-      testEarthquake,
-      ...previous.filter((event) => event.source !== 'Simulation Test'),
-    ]);
+      const payload = {
+        magnitude: 6.2,
+        place: 'Test Seismic Zone, Philippines',
+        depth_km: 15,
+        distance_from_cdo_km: 20,
+        reported_intensity: 'VI',
+        classification: 'earthquake_alert',
+      };
+
+      const sendRequest = (accessToken: string) =>
+        fetch(`${API_BASE_URL}/earthquakes/simulate/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify(payload),
+        });
+
+      let res = await sendRequest(token);
+      if (res.status === 401) {
+        token = await refreshClinicStaffAccessToken();
+        res = await sendRequest(token);
+      }
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.event) {
+        throw new Error(
+          data?.detail ||
+          data?.error ||
+          `Failed to trigger simulation (HTTP ${res.status}).`
+        );
+      }
+
+      const simEvent: EarthquakeEvent = data.event;
+      setDismissedQuakeIds((previous) => previous.filter((id) => id !== simEvent.id));
+      setEarthquakes((previous) => [
+        simEvent,
+        ...previous.filter((event) => event.id !== simEvent.id),
+      ]);
+      setEarthquakeError('');
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to trigger earthquake simulation.';
+      console.error('Failed to trigger earthquake simulation:', message);
+      setEarthquakeError(message);
+    }
   }, []);
 
   // Refresh incident reports once per minute, but check the earthquake feed
@@ -371,57 +596,23 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     };
   }, [loadData, loadEarthquakes]);
 
-  // Supabase Realtime Subscription for instant Incident Feed updates
-  useEffect(() => {
-    if (!SUPABASE_URL || !SUPABASE_KEY) return;
-    const wsProtocol = SUPABASE_URL.startsWith('https') ? 'wss://' : 'ws://';
-    const cleanHost = SUPABASE_URL.replace(/^https?:\/\//, '');
-    const realtimeUrl = `${wsProtocol}${cleanHost}/realtime/v1/websocket?apikey=${SUPABASE_KEY}&vsn=1.0.0`;
-
-    let socket: WebSocket | null = null;
-    try {
-      socket = new WebSocket(realtimeUrl);
-      socket.onopen = () => {
-        socket?.send(JSON.stringify({
-          topic: 'realtime:public:incident',
-          event: 'phx_join',
-          payload: { config: { postgres_changes: [{ event: '*', schema: 'public', table: 'incident' }] } },
-          ref: '1'
-        }));
-      };
-      socket.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          if (message.event === 'postgres_changes') {
-            void loadData();
-          }
-        } catch {}
-      };
-    } catch (err) {
-      console.warn('Realtime socket connection failed, relying on polling:', err);
-    }
-
-    return () => {
-      if (socket) socket.close();
-    };
-  }, [loadData]);
-
-  // Derive active recent earthquake (within 24 hours, magnitude >= 4.0 or within 300km)
+  // Derive active recent earthquake alerts strictly from backend-evaluated classification
   const ONE_DAY_MS = 24 * 60 * 60 * 1000;
   const currentTimestamp = new Date().getTime();
 
   const activeEarthquakeAlerts = useMemo(() => {
     return earthquakes.filter((eq) => {
-      const isWithin24Hours = currentTimestamp - eq.time <= ONE_DAY_MS;
-      const meetsCriteria = eq.magnitude >= 4.0 || eq.distance_from_cdo_km <= 300;
+      const eventMs = getEventTimestampMs(eq);
+      const isWithin24Hours = eventMs > 0 ? currentTimestamp - eventMs <= ONE_DAY_MS : true;
+      const isAlertClassification = eq.classification === 'earthquake_alert';
       const notDismissed = !dismissedQuakeIds.includes(eq.id);
-      return isWithin24Hours && meetsCriteria && notDismissed;
+      return isWithin24Hours && isAlertClassification && notDismissed;
     });
   }, [earthquakes, dismissedQuakeIds, currentTimestamp]);
 
-  // Select the most recent qualifying event, regardless of the API's array order.
+  // Select the most recent alert event, regardless of the API's array order.
   const latestQuakeAlert = activeEarthquakeAlerts.reduce<EarthquakeEvent | null>(
-    (latest, quake) => (!latest || quake.time > latest.time ? quake : latest),
+    (latest, quake) => (!latest || getEventTimestampMs(quake) > getEventTimestampMs(latest) ? quake : latest),
     null
   );
   latestQuakeAlertRef.current = latestQuakeAlert;
@@ -520,7 +711,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     });
   }, []);
 
-  // Combined Notifications (Incidents + Earthquakes)
+  // Combined Notifications (Incidents + Backend-classified Earthquakes)
   useEffect(() => {
     const now = Date.now();
     const incidentNotifs: NotificationItem[] = incidents.map((inc: IncidentReport) => {
@@ -557,49 +748,77 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     });
 
     const earthquakeNotifs: NotificationItem[] = earthquakes
-      .filter((eq) => now - eq.time <= ONE_DAY_MS && (eq.magnitude >= 4.0 || eq.distance_from_cdo_km <= 300))
+      .filter((eq) => {
+        const eventMs = getEventTimestampMs(eq);
+        const isRecent = eventMs > 0 ? now - eventMs <= ONE_DAY_MS : true;
+        return isRecent && (eq.classification === 'earthquake_alert' || eq.classification === 'advisory');
+      })
       .map((eq) => ({
         id: `eq-${eq.id}`,
-        title: `⚠️ Earthquake Reported (Mag ${eq.magnitude.toFixed(1)})`,
-        message: `${eq.place} — ${eq.distance_from_cdo_km} km from CDO (Depth: ${eq.depth_km} km). Drop, Cover, and Hold On.`,
+        title: `${formatClassificationLabel(eq.classification)} (${eq.magnitude !== null ? `Mag ${eq.magnitude.toFixed(1)}` : 'PHIVOLCS'})`,
+        message: `${eq.place} — ${eq.distance_from_cdo_km} km from USTP CDO${eq.reported_intensity ? ` • Intensity ${eq.reported_intensity}` : ''}. Drop, Cover, and Hold On.`,
         time: 'Recent',
-        type: 'critical',
+        type: eq.classification === 'earthquake_alert' ? 'critical' : 'info',
         unread: true,
       }));
 
     setNotifications([...earthquakeNotifs, ...incidentNotifs]);
   }, [incidents, earthquakes]);
 
-  const updateResponderAvailability = async (responder: Responder, newStatus: string) => {
-    const rid = responder.responder_id ?? responder.id;
+  const updateResponderAvailability = async (
+    responder: Responder,
+    newStatus: string
+  ) => {
+    const rid =
+      responder.responders_id ?? responder.responder_id ?? responder.id;
+
     if (!rid) return;
 
-    const filterCol = responder.responder_id ? 'responder_id' : 'id';
     setError('');
 
     try {
       await supabaseRequest(
-        `responder?${filterCol}=eq.${rid}`,
+        `responder?responders_id=eq.${rid}`,
         {
           method: 'PATCH',
-          body: JSON.stringify({ availability_status: newStatus }),
+          body: JSON.stringify({
+            availability_status: newStatus,
+          }),
         }
       );
 
-      if (selectedResponderForDetails && (selectedResponderForDetails.responder_id ?? selectedResponderForDetails.id) === rid) {
-        setSelectedResponderForDetails({ ...selectedResponderForDetails, availability_status: newStatus });
+      const selectedRid =
+        selectedResponderForDetails?.responders_id ??
+        selectedResponderForDetails?.responder_id ??
+        selectedResponderForDetails?.id;
+
+      if (selectedResponderForDetails && selectedRid === rid) {
+        setSelectedResponderForDetails({
+          ...selectedResponderForDetails,
+          availability_status: newStatus,
+        });
       }
+
       await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update responder availability status.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update responder availability status.'
+      );
     }
   };
 
-  const handleSaveIncidentAssignment = async (incident: IncidentReport, newStatus: string, responderId: number) => {
+  const handleSaveIncidentAssignment = async (
+    incident: IncidentReport,
+    newStatus: string,
+    responderId: number
+  ) => {
     setSubmittingAssignment(true);
     setError('');
 
     try {
+      // Step 1: Update incident status
       await supabaseRequest(
         `incident?incident_id=eq.${incident.incident_id}`,
         {
@@ -608,44 +827,81 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
         }
       );
 
-      if (responderId > 0 && responderId !== incident.assigned_responder_id) {
-        const chosenResponder = responders.find(r => (r.responder_id ?? r.id) === responderId);
-        try {
-          await supabaseRequest('responder_notification', {
+      // Step 2: Create notification and assign responder
+      if (
+        responderId > 0 &&
+        responderId !== incident.assigned_responder_id
+      ) {
+        const chosenResponder = responders.find(
+          r => (r.responders_id ?? r.responder_id ?? r.id) === responderId
+        );
+
+        // Create notification
+        const notificationResult = await supabaseRequest(
+          'notification?select=notification_id',
+          {
             method: 'POST',
             body: JSON.stringify({
-              responder_id: responderId,
               incident_id: incident.incident_id,
+              notification_type: 'incident_assignment',
+              target: 'responder',
               message: `Assigned to Incident #${incident.incident_id} (${incident.incident_name}) at ${incident.location_description || 'Campus'}.`,
-              is_read: false,
+              priority: 'normal',
+              delivery_status: 'PENDING',
+              status: 'unread',
+              delivery: 'PENDING',
             }),
-          });
-        } catch {
-          await supabaseRequest('responder_notification', {
-            method: 'POST',
-            body: JSON.stringify({
-              responder_id: responderId,
-              incident_id: incident.incident_id,
-            }),
-          });
+          }
+        );
+
+        const createdNotification = Array.isArray(notificationResult)
+          ? notificationResult[0]
+          : notificationResult;
+
+        if (!createdNotification?.notification_id) {
+          throw new Error('Failed to create the responder notification.');
         }
 
-        if (chosenResponder && ['assigned', 'active'].includes(newStatus.toLowerCase())) {
+        // Link notification to responder
+        await supabaseRequest('responder_notification', {
+          method: 'POST',
+          body: JSON.stringify({
+            notification_id: createdNotification.notification_id,
+            responders_id: responderId,
+            status: 'ASSIGNED',
+          }),
+        });
+
+        // Update responder availability
+        if (
+          chosenResponder &&
+          ['assigned', 'active'].includes(newStatus.toLowerCase())
+        ) {
           await updateResponderAvailability(chosenResponder, 'busy');
         }
       }
 
+      // Step 3: Make responder available when incident is resolved
       if (newStatus.toLowerCase() === 'resolved' && responderId > 0) {
-        const chosenResponder = responders.find(r => (r.responder_id ?? r.id) === responderId);
+        const chosenResponder = responders.find(
+          r => (r.responders_id ?? r.responder_id ?? r.id) === responderId
+        );
+
         if (chosenResponder) {
           await updateResponderAvailability(chosenResponder, 'available');
         }
       }
 
+      // Step 4: Refresh dashboard
       setSelectedIncidentForUpdate(null);
       await loadData();
+
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update incident and assign responder.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update incident and assign responder.'
+      );
     } finally {
       setSubmittingAssignment(false);
     }
@@ -703,26 +959,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     });
   }, [activeOperationalIncidents, feedStatusFilter, searchQuery]);
 
-  const filteredIncidents = useMemo(() => {
-    if (!searchQuery.trim()) return incidents;
-    const queryTerms = searchQuery.toLowerCase().trim().split(/\s+/);
-    return incidents.filter((item) => {
-      const idStr = String(item.incident_id);
-      const typeStr = (item.incident_name ?? '').toLowerCase();
-      const reporterStr = (item.reporter_name ?? '').toLowerCase();
-      const locStr = (item.location_description ?? '').toLowerCase();
-      const assignedStr = (item.assigned_responder_name ?? '').toLowerCase();
-
-      return queryTerms.every((term) =>
-        idStr.includes(term) ||
-        typeStr.includes(term) ||
-        reporterStr.includes(term) ||
-        locStr.includes(term) ||
-        assignedStr.includes(term)
-      );
-    });
-  }, [incidents, searchQuery]);
-
   const filteredResponders = useMemo(() => {
     if (rosterFilter === 'all') return responders;
     return responders.filter((r) => (r.availability_status || 'offline').toLowerCase() === rosterFilter);
@@ -762,14 +998,18 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               <AlertTriangle className="w-10 h-10 text-amber-700 stroke-[2.5]" />
             </div>
 
+            <span className="text-[11px] font-black uppercase tracking-widest px-3 py-1 rounded-full bg-red-900/80 text-amber-300 border border-red-500/40 mb-2">
+              {formatClassificationLabel(latestQuakeAlert.classification)}
+            </span>
             <h2 className="text-2xl font-black tracking-wider text-amber-400 mb-2">
               EARTHQUAKE ALERT!
             </h2>
             <p className="text-base font-bold text-white mb-1">
-              Mag {latestQuakeAlert.magnitude.toFixed(1)} — {latestQuakeAlert.place}
+              {latestQuakeAlert.magnitude !== null ? `Mag ${latestQuakeAlert.magnitude.toFixed(1)} — ` : ''}{latestQuakeAlert.place}
             </p>
             <p className="text-xs font-medium text-red-200/80 mb-6">
-              {latestQuakeAlert.distance_from_cdo_km} km from CDO | Depth: {latestQuakeAlert.depth_km} km
+              {latestQuakeAlert.distance_from_cdo_km} km from USTP CDO | Depth: {latestQuakeAlert.depth_km !== null ? `${latestQuakeAlert.depth_km} km` : '—'}
+              {latestQuakeAlert.reported_intensity ? ` | Intensity ${latestQuakeAlert.reported_intensity}` : ''}
             </p>
 
             <div className="w-full bg-[#180404] rounded-2xl p-4 mb-6 border border-red-900/60 text-center">
@@ -788,7 +1028,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                 rel="noopener noreferrer"
                 className="text-xs font-bold text-sky-400 hover:text-sky-300 underline underline-offset-4 flex items-center space-x-1.5 mb-6 transition"
               >
-                <span>View USGS / PHIVOLCS Report</span>
+                <span>View PHIVOLCS Report</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
             )}
@@ -810,6 +1050,83 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
             >
               Dismiss
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* EARTHQUAKE EVENT DETAILS MODAL */}
+      {selectedEarthquakeForDetails && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4"
+          onClick={() => setSelectedEarthquakeForDetails(null)}
+        >
+          <div
+            className="bg-white rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl border border-slate-200 space-y-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <span
+                  data-classification={selectedEarthquakeForDetails.classification ?? 'monitoring'}
+                  className={`text-[11px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full ${getClassificationBadgeStyle(selectedEarthquakeForDetails.classification)}`}
+                >
+                  {formatClassificationLabel(selectedEarthquakeForDetails.classification)}
+                </span>
+                <h3 className="text-lg font-black text-slate-900 mt-1.5">
+                  Seismic Event Details
+                </h3>
+                <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                  {formatClassificationNote(selectedEarthquakeForDetails.classification)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedEarthquakeForDetails(null)}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2.5 text-xs text-slate-600 bg-slate-50 p-4 rounded-2xl border border-slate-200/60 font-medium">
+              <p><strong>Classification:</strong> {formatClassificationLabel(selectedEarthquakeForDetails.classification)}</p>
+              <p><strong>Status Tier:</strong> {formatClassificationNote(selectedEarthquakeForDetails.classification)}</p>
+              <p><strong>Source:</strong> {selectedEarthquakeForDetails.source || 'PHIVOLCS'}</p>
+              <p><strong>Location:</strong> {selectedEarthquakeForDetails.place}</p>
+              <p><strong>Magnitude:</strong> {selectedEarthquakeForDetails.magnitude !== null ? selectedEarthquakeForDetails.magnitude.toFixed(1) : '—'}</p>
+              <p><strong>Reported Intensity:</strong> {selectedEarthquakeForDetails.reported_intensity || 'None reported'}</p>
+              <p><strong>Distance from USTP CDO:</strong> {selectedEarthquakeForDetails.distance_from_cdo_km} km</p>
+              <p><strong>Depth:</strong> {selectedEarthquakeForDetails.depth_km !== null ? `${selectedEarthquakeForDetails.depth_km} km` : '—'}</p>
+              <p>
+                <strong>Occurred At:</strong>{' '}
+                {getEventTimestampMs(selectedEarthquakeForDetails) > 0
+                  ? new Date(getEventTimestampMs(selectedEarthquakeForDetails)).toLocaleString()
+                  : '—'}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              {selectedEarthquakeForDetails.url && (
+                <a
+                  href={selectedEarthquakeForDetails.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition"
+                >
+                  <span>PHIVOLCS Bulletin</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedEarthquakeForDetails(null)}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1136,9 +1453,9 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
               </div>
 
               {/* TWO COLUMN GRID */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
                 {/* Live Incident Feed Summary */}
-                <div className="lg:col-span-2 bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 flex flex-col">
+                <div className="lg:col-span-2 bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 flex flex-col min-h-0">
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h3 className="text-lg font-extrabold text-slate-900">Live Incident Feed</h3>
@@ -1158,7 +1475,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                   ) : prioritizedAndFilteredIncidents.length === 0 ? (
                     <div className="py-12 text-center text-slate-400 text-sm">No active incident reports recorded.</div>
                   ) : (
-                    <div className="space-y-3 overflow-y-auto max-h-[420px] pr-1">
+                    <div className="space-y-3 overflow-y-auto overscroll-contain max-h-[380px] sm:max-h-[420px] pr-1.5">
                       {prioritizedAndFilteredIncidents.map((inc) => {
                         const statusLower = (inc.status || 'pending').toLowerCase();
                         return (
@@ -1193,14 +1510,21 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                   )}
                 </div>
 
-                {/* Regional Earthquakes Panel */}
-                <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 flex flex-col">
-                  <div className="flex items-center justify-between mb-4 gap-3">
+                {/* Regional Earthquakes Panel (Scrollable) */}
+                <div className="bg-white rounded-3xl p-5 sm:p-6 shadow-sm border border-slate-200/80 flex flex-col min-h-0 max-h-[540px] sm:max-h-[580px]">
+                  <div className="flex items-start justify-between mb-3 gap-2 shrink-0">
                     <div className="min-w-0">
-                      <h3 className="text-lg font-extrabold text-slate-900">Regional Earthquakes</h3>
-                      <p className="text-xs text-slate-500 font-medium">USGS / PHIVOLCS (300 km radius)</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-lg font-extrabold text-slate-900">Regional Earthquakes</h3>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                          {earthquakes.length}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 font-medium">
+                        PHIVOLCS Seismic Monitoring • Past 30 Days • Recorded vs. Alert Tiers
+                      </p>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
                         onClick={handleTestEarthquake}
@@ -1222,31 +1546,72 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                     </div>
                   </div>
 
+                  {earthquakeError && (
+                    <div
+                      role="status"
+                      className="mb-3 px-3.5 py-2.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center justify-between gap-2 shrink-0"
+                    >
+                      <span className="min-w-0">Feed error: {earthquakeError}</span>
+                      <button
+                        type="button"
+                        onClick={() => void loadEarthquakes()}
+                        className="text-[11px] font-extrabold underline shrink-0 cursor-pointer"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
                   {earthquakes.length === 0 ? (
-                    <div className="py-12 text-center text-slate-400 text-sm">No recent regional earthquakes detected.</div>
+                    <div className="py-12 text-center text-slate-400 text-sm">
+                      {earthquakeError
+                        ? 'Unable to display regional earthquakes due to feed error.'
+                        : 'No regional earthquakes recorded over the past 30 days.'}
+                    </div>
                   ) : (
-                    <div className="space-y-3 overflow-y-auto max-h-[420px] pr-1">
-                      {earthquakes.map((eq) => (
-                        <div
-                          key={eq.id}
-                          onClick={() => setSelectedEarthquakeForDetails(eq)}
-                          className="p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200/60 transition cursor-pointer"
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <span className={`text-xs font-black px-2 py-0.5 rounded-md ${
-                              eq.magnitude >= 5.0 ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'
-                            }`}>
-                              Mag {eq.magnitude.toFixed(1)}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-bold">{eq.distance_from_cdo_km} km from CDO</span>
+                    <div
+                      data-testid="regional-earthquakes-scroll-list"
+                      className="flex-1 min-h-0 space-y-3 overflow-y-auto overscroll-contain max-h-[380px] sm:max-h-[420px] pr-1.5"
+                    >
+                      {earthquakes.map((eq) => {
+                        const cls = eq.classification ?? 'monitoring';
+                        const isMonitoring = cls === 'monitoring';
+                        return (
+                          <div
+                            key={eq.id}
+                            onClick={() => setSelectedEarthquakeForDetails(eq)}
+                            className={`p-3.5 rounded-2xl border transition cursor-pointer ${
+                              cls === 'earthquake_alert'
+                                ? 'bg-rose-50/40 hover:bg-rose-50/80 border-rose-200/80'
+                                : cls === 'advisory'
+                                ? 'bg-amber-50/40 hover:bg-amber-50/80 border-amber-200/80'
+                                : 'bg-slate-50/90 hover:bg-slate-100 border-slate-200/80'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <span
+                                data-classification={cls}
+                                className={`text-[10px] font-black px-2 py-0.5 rounded-md uppercase ${getClassificationBadgeStyle(cls)}`}
+                              >
+                                {formatClassificationLabel(cls)}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-bold">{eq.distance_from_cdo_km} km from USTP CDO</span>
+                            </div>
+                            <h4 className="text-xs font-bold text-slate-900 truncate mb-1">
+                              {eq.magnitude !== null ? `Mag ${eq.magnitude.toFixed(1)} — ` : ''}{eq.place}
+                            </h4>
+                            <div className="flex items-center justify-between text-[10px] text-slate-500">
+                              <span>
+                                {isMonitoring ? 'Recorded only' : 'Active tier'}
+                                {' • '}
+                                Depth: {eq.depth_km !== null ? `${eq.depth_km} km` : '—'}
+                                {eq.reported_intensity ? ` • Int. ${eq.reported_intensity}` : ''}
+                              </span>
+                              <span className="uppercase font-bold text-indigo-600">{eq.source}</span>
+                            </div>
                           </div>
-                          <h4 className="text-xs font-bold text-slate-900 truncate mb-1">{eq.place}</h4>
-                          <div className="flex items-center justify-between text-[10px] text-slate-500">
-                            <span>Depth: {eq.depth_km} km</span>
-                            <span className="uppercase font-bold text-indigo-600">{eq.source}</span>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>

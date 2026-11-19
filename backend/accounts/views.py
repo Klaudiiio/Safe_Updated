@@ -1,7 +1,5 @@
-import math
 import logging
 import random
-import time
 import requests
 
 from django.conf import settings
@@ -16,6 +14,16 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from .earthquake_service import (
+    create_and_sync_simulation_earthquake,
+    fetch_earthquakes_from_supabase,
+    filter_events_for_feed,
+    get_evaluated_earthquakes,
+    get_min_feed_magnitude,
+    get_ustp_cdo_coords,
+    parse_event_timestamp,
+    sync_earthquakes_to_supabase,
+)
 from .serializers import (
     AuthTokenSerializer,
     MobileAuthTokenSerializer,
@@ -30,85 +38,251 @@ logger = logging.getLogger(__name__)
 # Cache-backed secure OTP constants (10 mins expiration, max 5 attempts)
 OTP_EXPIRY_SECONDS = 600
 MAX_ATTEMPTS = 5
-
-# Cagayan de Oro coordinates & radius configuration for USGS earthquake feed
-CDO_LAT = 8.4542
-CDO_LON = 124.6319
+SUPABASE_SYNC_ERROR_COOLDOWN_SECONDS = 60
 
 
-def calculate_distance(lat1, lon1, lat2, lon2):
-    """Calculate distance in kilometers using the Haversine formula."""
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2 +
-         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
-         math.sin(dlon / 2) ** 2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return round(R * c, 1)
+def _event_dedup_key(event: dict) -> str:
+    ext_id = event.get("external_event_id") or event.get("id")
+    if ext_id:
+        return str(ext_id).strip()
+    occurred = event.get("event_occurred_at") or event.get("time") or ""
+    place = str(event.get("place") or "").strip().lower()
+    mag = event.get("magnitude")
+    return f"fallback|{occurred}|{place}|{mag}"
+
+
+def _event_sort_tuple(event: dict) -> tuple[float, float]:
+    eval_dt = parse_event_timestamp(event.get("evaluated_at"))
+    occ_dt = parse_event_timestamp(event.get("event_occurred_at") or event.get("time"))
+    eval_ts = eval_dt.timestamp() if eval_dt else 0.0
+    occ_ts = occ_dt.timestamp() if occ_dt else 0.0
+    return (eval_ts, occ_ts)
+
+
+def _merge_and_deduplicate_events(*event_lists: list[dict]) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for event_list in event_lists:
+        if not event_list:
+            continue
+        for ev in event_list:
+            if not isinstance(ev, dict):
+                continue
+            key = _event_dedup_key(ev)
+            existing = merged.get(key)
+            if existing is None or _event_sort_tuple(ev) >= _event_sort_tuple(existing):
+                merged[key] = ev
+
+    result = list(merged.values())
+    result.sort(
+        key=lambda e: parse_event_timestamp(e.get("event_occurred_at") or e.get("time"))
+        or parse_event_timestamp("1970-01-01T00:00:00Z"),
+        reverse=True,
+    )
+    return result
+
+
+def _try_sync_earthquakes_throttled(events: list[dict], context_label: str) -> None:
+    if not events:
+        return
+    error_cache_key = "earthquake_supabase_sync_error_cooldown"
+    if cache.get(error_cache_key):
+        return
+    try:
+        sync_earthquakes_to_supabase(events)
+        cache.delete(error_cache_key)
+    except Exception as sync_err:
+        cache.set(error_cache_key, str(sync_err), timeout=SUPABASE_SYNC_ERROR_COOLDOWN_SECONDS)
+        logger.warning(f"Earthquake Supabase sync failed ({context_label}): {str(sync_err)}")
+
+
+def _safe_fetch_persisted_earthquakes() -> list[dict]:
+    try:
+        return fetch_earthquakes_from_supabase()
+    except Exception as db_err:
+        logger.warning(f"Failed to read persisted earthquakes from Supabase: {str(db_err)}")
+        return []
+
+
+def _is_clinic_staff_or_admin(user) -> bool:
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+        return True
+    profile = getattr(user, "profile", None)
+    role = (getattr(profile, "role", "") or "").strip().lower()
+    return role in {"clinic_staff", "admin"}
 
 
 class EarthquakeFeedAPI(APIView):
-    
     """
-    Proxy endpoint to fetch earthquake events from the USGS GeoJSON feed,
-    calculate distance from Cagayan de Oro, cache briefly, and return clean JSON.
+    Endpoint to return normalized, backend-classified PHIVOLCS earthquake events
+    relative to USTP Cagayan de Oro, backed by and merged with persisted Supabase records.
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        cache_key = 'usgs_cdo_earthquakes'
-        cached_data = cache.get(cache_key)
-        if cached_data is not None:
-            return JsonResponse(cached_data, safe=False)
-            
+        cdo_lat, cdo_lon = get_ustp_cdo_coords()
+        radius_km = float(getattr(settings, 'EARTHQUAKE_REGIONAL_RADIUS_KM', 200.0))
+        blind_zone_km = float(getattr(settings, 'EARTHQUAKE_BLIND_ZONE_RADIUS_KM', 15.0))
+        cache_key = 'phivolcs_ustp_cdo_earthquakes'
 
-        usgs_url = (
-            "https://earthquake.usgs.gov/fdsnws/event/1/query?"
-            f"format=geojson&latitude={CDO_LAT}&longitude={CDO_LON}&maxradiuskm=300&orderby=time"
+        requested_min_mag_raw = request.query_params.get('min_magnitude')
+        try:
+            requested_min_mag = (
+                float(requested_min_mag_raw)
+                if requested_min_mag_raw is not None and str(requested_min_mag_raw).strip() != ''
+                else get_min_feed_magnitude()
+            )
+        except ValueError:
+            return Response(
+                {'error': 'Invalid min_magnitude query parameter.'},
+                status=400,
+            )
+
+        persisted_events = _safe_fetch_persisted_earthquakes()
+        cached_data = cache.get(cache_key)
+
+        if isinstance(cached_data, dict):
+            cached_events = cached_data.get('events') or []
+            merged_events = _merge_and_deduplicate_events(persisted_events, cached_events)
+            _try_sync_earthquakes_throttled(merged_events, context_label='cached_feed')
+
+            # Defaults to EARTHQUAKE_MIN_FEED_MAGNITUDE (M4.0) unless ?min_magnitude= is passed
+            filtered_cached = filter_events_for_feed(
+                merged_events,
+                min_magnitude=requested_min_mag,
+            )
+            return JsonResponse(
+                {
+                    **cached_data,
+                    'events': filtered_cached,
+                    'min_magnitude_filter': requested_min_mag,
+                },
+                safe=False,
+            )
+
+        try:
+            evaluated_events = get_evaluated_earthquakes()
+            merged_events = _merge_and_deduplicate_events(persisted_events, evaluated_events)
+            _try_sync_earthquakes_throttled(merged_events, context_label='live_feed')
+
+            payload = {
+                'center': {'latitude': cdo_lat, 'longitude': cdo_lon},
+                'radius_km': radius_km,
+                'blind_zone_km': blind_zone_km,
+                'source': 'PHIVOLCS',
+                'events': merged_events,
+                'phivolcs_reference_url': 'https://www.phivolcs.dost.gov.ph/',
+            }
+
+            cache.set(cache_key, payload, 300)  # Cache full merged feed for 5 minutes
+            filtered_events = filter_events_for_feed(merged_events, min_magnitude=requested_min_mag)
+            return JsonResponse(
+                {
+                    **payload,
+                    'events': filtered_events,
+                    'min_magnitude_filter': requested_min_mag,
+                }
+            )
+
+        except requests.RequestException as e:
+            if persisted_events:
+                logger.warning(f"PHIVOLCS live fetch failed, returning persisted events: {str(e)}")
+                filtered_persisted = filter_events_for_feed(
+                    persisted_events,
+                    min_magnitude=requested_min_mag,
+                )
+                return JsonResponse(
+                    {
+                        'center': {'latitude': cdo_lat, 'longitude': cdo_lon},
+                        'radius_km': radius_km,
+                        'blind_zone_km': blind_zone_km,
+                        'source': 'PHIVOLCS',
+                        'events': filtered_persisted,
+                        'min_magnitude_filter': requested_min_mag,
+                        'phivolcs_reference_url': 'https://www.phivolcs.dost.gov.ph/',
+                    }
+                )
+            logger.error(f"PHIVOLCS Earthquake feed fetch error: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch earthquake data from PHIVOLCS.', 'details': str(e)},
+                status=502,
+            )
+        except Exception as e:
+            logger.error(f"PHIVOLCS Earthquake feed error: {str(e)}")
+            return Response(
+                {'error': 'Failed to process earthquake monitoring data.', 'details': str(e)},
+                status=500,
+            )
+
+
+class SimulateEarthquakeView(APIView):
+    """
+    Protected endpoint allowing Clinic Staff or Admin users to create and persist
+    a marked Simulation Test earthquake event (source='Simulation Test') to Supabase.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        if not _is_clinic_staff_or_admin(request.user):
+            return Response(
+                {"detail": "Only clinic staff or admin users can trigger earthquake simulations."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        data = request.data if isinstance(request.data, dict) else {}
+
+        classification = str(data.get("classification") or "earthquake_alert").strip()
+        if classification not in {"monitoring", "advisory", "earthquake_alert"}:
+            return Response(
+                {"detail": "Invalid classification value."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            magnitude = float(data.get("magnitude", 6.2))
+            depth_km = float(data.get("depth_km", 15.0))
+            distance_km = float(data.get("distance_from_cdo_km", 20.0))
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Numeric fields (magnitude, depth_km, distance_from_cdo_km) must be valid numbers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        place = str(data.get("place") or "Simulated Seismic Zone, Cagayan de Oro").strip()
+        raw_intensity = data.get("reported_intensity", "VI")
+        reported_intensity = (
+            str(raw_intensity).strip() or None
+            if raw_intensity is not None
+            else None
         )
 
         try:
-            response = requests.get(usgs_url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            event = create_and_sync_simulation_earthquake(
+                magnitude=magnitude,
+                place=place,
+                classification=classification,
+                depth_km=depth_km,
+                distance_from_cdo_km=distance_km,
+                reported_intensity=reported_intensity,
+                created_by=request.user.username,
+            )
+        except Exception as exc:
+            logger.error(f"Earthquake simulation sync error: {str(exc)}")
+            return Response(
+                {"detail": f"Failed to persist simulation to Supabase: {str(exc)}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
-            events = []
-            for feature in data.get('features', []):
-                props = feature.get('properties', {})
-                geom = feature.get('geometry', {})
-                coords = geom.get('coordinates', [0, 0, 0])  # [lon, lat, depth]
+        cache.delete("phivolcs_ustp_cdo_earthquakes")
 
-                eq_lon, eq_lat, depth = coords[0], coords[1], coords[2]
-                distance = calculate_distance(CDO_LAT, CDO_LON, eq_lat, eq_lon)
-
-                events.append({
-                    'id': feature.get('id'),
-                    'magnitude': props.get('mag'),
-                    'place': props.get('place'),
-                    'time': props.get('time'),  # Epoch milliseconds
-                    'url': props.get('url'),
-                    'detail_url': props.get('detail'),
-                    'latitude': eq_lat,
-                    'longitude': eq_lon,
-                    'depth_km': depth,
-                    'distance_from_cdo_km': distance,
-                    'source': 'USGS Earthquake Catalog'
-                })
-
-            payload = {
-                'center': {'latitude': CDO_LAT, 'longitude': CDO_LON},
-                'radius_km': 300,
-                'events': events,
-                'phivolcs_reference_url': 'https://www.phivolcs.dost.gov.ph/'
-            }
-
-            cache.set(cache_key, payload, 300)  # Cache for 5 minutes
-            return JsonResponse(payload)
-
-        except requests.RequestException as e:
-            logger.error(f"USGS Earthquake feed fetch error: {str(e)}")
-            return Response({'error': 'Failed to fetch earthquake data from USGS.', 'details': str(e)}, status=502)
+        return Response(
+            {
+                "detail": "Simulation earthquake created and synced.",
+                "event": event,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class LoginView(TokenObtainPairView):
@@ -119,13 +293,13 @@ class LoginView(TokenObtainPairView):
 
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
-       
+
         if response.status_code == 200:
             username = request.data.get("username")
             try:
                 user = User.objects.get(username=username)
                 profile = user.profile
-               
+
                 sync_user_to_supabase(user, profile)
                 response.data["supabase_synced"] = True
                 response.data["sync_warning"] = None
@@ -147,7 +321,7 @@ class LoginView(TokenObtainPairView):
                 else:
                     response.data["supabase_synced"] = False
                     response.data["sync_warning"] = err_str
-               
+
         return response
 
 
@@ -160,13 +334,13 @@ class MobileLoginView(TokenObtainPairView):
 
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
-       
+
         if response.status_code == 200:
             username = request.data.get("username")
             try:
                 user = User.objects.get(username=username)
                 profile = user.profile
-               
+
                 sync_user_to_supabase(user, profile)
                 response.data["supabase_synced"] = True
                 response.data["sync_warning"] = None
@@ -188,7 +362,7 @@ class MobileLoginView(TokenObtainPairView):
                 else:
                     response.data["supabase_synced"] = False
                     response.data["sync_warning"] = err_str
-               
+
         return response
 
 
@@ -423,7 +597,7 @@ class PasswordResetRequestView(APIView):
                 return Response({'detail': 'If an associated account exists, verification instructions have been sent.'}, status=200)
 
             otp_code = str(random.randint(100000, 999999))
-           
+
             # Cache-backed secure storage with attempt counter and 10-minute expiry
             cache.set(f"otp_{email}", otp_code, timeout=OTP_EXPIRY_SECONDS)
             cache.set(f"otp_attempts_{email}", 0, timeout=OTP_EXPIRY_SECONDS)
@@ -534,7 +708,7 @@ class CreateUserView(APIView):
                 email=email,
             )
             user.set_password(password)
-           
+
             if hasattr(user, 'profile'):
                 user.profile.name = name
                 user.profile.phone_number = phone_number
@@ -602,7 +776,7 @@ class CreateClinicStaffView(APIView):
                 is_staff=True
             )
             user.set_password(password)
-           
+
             if hasattr(user, 'profile'):
                 user.profile.name = name
                 user.profile.phone_number = contact_number
@@ -614,7 +788,7 @@ class CreateClinicStaffView(APIView):
             sync_warning = None
             supabase_url = getattr(settings, 'SUPABASE_URL', None)
             service_key = getattr(settings, 'SUPABASE_SERVICE_ROLE_KEY', None)
-           
+
             if supabase_url and service_key:
                 try:
                     sync_user_to_supabase(user, user.profile)
@@ -680,7 +854,7 @@ class IncidentListView(APIView):
                 return Response({"error": f"Supabase error: {res.text}"}, status=res.status_code)
 
             raw_data = res.json()
-           
+
             formatted_results = []
             for item in raw_data:
                 incident_type_name = "Incident"

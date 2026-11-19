@@ -16,7 +16,9 @@ from .views import (
     VerifyOtpView,
     ConfirmPasswordResetView,
     EarthquakeFeedAPI,
+    SimulateEarthquakeView,
 )
+
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
@@ -32,7 +34,8 @@ urlpatterns = [
     path('users/create/', CreateUserView.as_view(), name='user-create'),
     path('incidents/', IncidentListView.as_view(), name='incident-list'),
     path('earthquakes/', EarthquakeFeedAPI.as_view(), name='earthquake-feed'),
-   
+    path('earthquakes/simulate/', SimulateEarthquakeView.as_view(), name='simulate-earthquake'),
+
     # Password Reset OTP Endpoints
     path('password-reset/', PasswordResetRequestView.as_view(), name='password_reset_request'),
     path('verify-otp/', VerifyOtpView.as_view(), name='verify_otp'),

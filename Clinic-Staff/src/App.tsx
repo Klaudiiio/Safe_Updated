@@ -13,7 +13,7 @@ interface AuthResponse {
   };
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000/api/auth';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/auth';
 
 export default function App() {
   const [role, setRole] = useState(() => localStorage.getItem('clinic_staff_role'));
