@@ -16,6 +16,8 @@ create table if not exists public.earthquake_monitoring (
     event_occurred_at timestamptz not null,
     evaluated_at timestamptz not null default now(),
     alert_active boolean not null default false,
+    alert_detected_at timestamptz,
+    alert_expires_at timestamptz,
     buzzer_enabled boolean not null default false,
     led_enabled boolean not null default false,
     led_color text not null default 'amber',
@@ -39,6 +41,11 @@ create table if not exists public.earthquake_monitoring (
     ),
     constraint earthquake_monitoring_ack_timestamp_check check (
         (not acknowledged) or (acknowledged_at is not null)
+    ),
+    constraint earthquake_monitoring_alert_expiry_check check (
+        alert_expires_at is null
+        or alert_detected_at is null
+        or alert_expires_at >= alert_detected_at
     )
 );
 
@@ -49,6 +56,8 @@ alter table public.earthquake_monitoring
     add column if not exists source text not null default 'PHIVOLCS',
     add column if not exists evaluated_at timestamptz not null default now(),
     add column if not exists alert_active boolean not null default false,
+    add column if not exists alert_detected_at timestamptz,
+    add column if not exists alert_expires_at timestamptz,
     add column if not exists buzzer_enabled boolean not null default false,
     add column if not exists led_enabled boolean not null default false,
     add column if not exists led_color text not null default 'amber',
@@ -66,6 +75,17 @@ alter table public.earthquake_monitoring
     add constraint earthquake_monitoring_classification_check
     check (classification in ('monitoring', 'advisory', 'earthquake_alert'));
 
+alter table public.earthquake_monitoring
+    drop constraint if exists earthquake_monitoring_alert_expiry_check;
+
+alter table public.earthquake_monitoring
+    add constraint earthquake_monitoring_alert_expiry_check
+    check (
+        alert_expires_at is null
+        or alert_detected_at is null
+        or alert_expires_at >= alert_detected_at
+    );
+
 create index if not exists idx_earthquake_monitoring_occurred_at
     on public.earthquake_monitoring (event_occurred_at desc);
 
@@ -75,6 +95,10 @@ create index if not exists idx_earthquake_monitoring_classification
 create index if not exists idx_earthquake_monitoring_alert_active
     on public.earthquake_monitoring (alert_active, acknowledged)
     where alert_active = true;
+
+create index if not exists idx_earthquake_monitoring_alert_expires_at
+    on public.earthquake_monitoring (alert_expires_at)
+    where alert_expires_at is not null;
 
 create or replace function public.set_earthquake_monitoring_updated_at()
 returns trigger
@@ -109,6 +133,8 @@ revoke all on table public.earthquake_monitoring from anon, authenticated;
 grant select on table public.earthquake_monitoring to authenticated;
 grant update (
     alert_active,
+    alert_detected_at,
+    alert_expires_at,
     buzzer_enabled,
     led_enabled,
     led_color,
@@ -149,3 +175,6 @@ begin
     end if;
 end
 $$;
+
+-- Reload PostgREST schema cache so new columns/indexes are immediately available
+notify pgrst, 'reload schema';

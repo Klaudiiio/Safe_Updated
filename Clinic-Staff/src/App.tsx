@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { Eye, EyeOff, HeartPulse, LockKeyhole, UserRound, Mail, ArrowLeft, Send } from 'lucide-react';
 import ClinicStaffDashboard from './ClinicStaffDashboard';
 
@@ -13,12 +14,67 @@ interface AuthResponse {
   };
 }
 
+export interface GlobalRealtimeAlertEvent {
+  id: string;
+  sourceTable: 'earthquake_monitoring' | 'notification';
+  eventType: string;
+  receivedAt: string;
+  payload: Record<string, any>;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/auth';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.replace(/\/+$/, '');
+const SUPABASE_KEY =
+  import.meta.env.VITE_SUPABASE_ANON_KEY ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+let globalRealtimeClient: SupabaseClient | null = null;
+
+function getGlobalRealtimeClient(): SupabaseClient | null {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+  if (!globalRealtimeClient) {
+    globalRealtimeClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+  }
+  return globalRealtimeClient;
+}
+
+async function ensureValidSupabaseTokenForRealtime(): Promise<string | null> {
+  const existingToken = localStorage.getItem('clinic_staff_supabase_token');
+  const djangoToken = localStorage.getItem('clinic_staff_access_token');
+
+  if (!djangoToken) return existingToken || null;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/token/supabase/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${djangoToken}`,
+      },
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data?.supabase_access_token) {
+        localStorage.setItem('clinic_staff_supabase_token', data.supabase_access_token);
+        return data.supabase_access_token;
+      }
+    }
+  } catch {
+    // Fall back to existing token if refresh call is temporarily unreachable
+  }
+
+  return existingToken || null;
+}
 
 export default function App() {
   const [role, setRole] = useState(() => localStorage.getItem('clinic_staff_role'));
   const [isForgotPassword, setIsForgotPassword] = useState(false);
-  
+
   // Login fields
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -30,6 +86,155 @@ export default function App() {
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Global delivery state across routes / views while authenticated
+  const [globalRealtimeStatus, setGlobalRealtimeStatus] = useState<
+    'disconnected' | 'connecting' | 'connected' | 'error'
+  >('disconnected');
+  const [latestGlobalEvent, setLatestGlobalEvent] = useState<GlobalRealtimeAlertEvent | null>(null);
+
+  const signOut = useCallback(() => {
+    [
+      'access_token',
+      'refresh_token',
+      'supabase_access_token',
+      'supabase_token',
+      'role',
+      'name',
+    ].forEach((key) => localStorage.removeItem(`clinic_staff_${key}`));
+
+    setUsername('');
+    setPassword('');
+    setRole(null);
+    setGlobalRealtimeStatus('disconnected');
+    setLatestGlobalEvent(null);
+  }, []);
+
+  // Global delivery channel active whenever the user is authenticated as clinic_staff
+  useEffect(() => {
+    if (role !== 'clinic_staff') {
+      setGlobalRealtimeStatus('disconnected');
+      return;
+    }
+
+    const client = getGlobalRealtimeClient();
+    if (!client) {
+      setGlobalRealtimeStatus('error');
+      return;
+    }
+
+    let isMounted = true;
+    setGlobalRealtimeStatus('connecting');
+
+    const channelId = `global-clinic-delivery-${Math.random().toString(36).slice(2, 9)}`;
+
+    const setupGlobalChannel = async () => {
+      const sbToken = await ensureValidSupabaseTokenForRealtime();
+      if (sbToken) {
+        client.realtime.setAuth(sbToken);
+      }
+
+      if (!isMounted) return;
+
+      const channel = client
+        .channel(channelId)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'earthquake_monitoring',
+          },
+          (payload) => {
+            if (!isMounted) return;
+            const row = (payload.new || payload.old || {}) as Record<string, any>;
+            const eventId = String(
+              row.external_event_id || row.earthquake_event_id || row.id || Date.now()
+            );
+            setLatestGlobalEvent({
+              id: `eq-${payload.eventType}-${eventId}`,
+              sourceTable: 'earthquake_monitoring',
+              eventType: payload.eventType,
+              receivedAt: new Date().toISOString(),
+              payload: row,
+            });
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'notification',
+          },
+          (payload) => {
+            if (!isMounted) return;
+            const row = (payload.new || {}) as Record<string, any>;
+            const notifType = String(row.type || row.notification_type || '').toLowerCase();
+            if (
+              notifType === 'earthquake_alert' ||
+              notifType === 'incident_assignment' ||
+              Boolean(row.earthquake_event_id)
+            ) {
+              setLatestGlobalEvent({
+                id: `notif-${String(row.notification_id || row.id || Date.now())}`,
+                sourceTable: 'notification',
+                eventType: payload.eventType,
+                receivedAt: new Date().toISOString(),
+                payload: row,
+              });
+            }
+          }
+        )
+        .subscribe((status, err) => {
+          if (!isMounted) return;
+          if (status === 'SUBSCRIBED') {
+            setGlobalRealtimeStatus('connected');
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            setGlobalRealtimeStatus('error');
+            if (err) {
+              console.warn('Global delivery channel error:', err);
+            }
+          } else if (status === 'CLOSED') {
+            setGlobalRealtimeStatus('disconnected');
+          }
+        });
+
+      return channel;
+    };
+
+    let activeChannelPromise = setupGlobalChannel();
+
+    // Refresh Supabase realtime auth periodically while signed in
+    const tokenSyncInterval = setInterval(() => {
+      void ensureValidSupabaseTokenForRealtime().then((freshToken) => {
+        if (freshToken && client) {
+          client.realtime.setAuth(freshToken);
+        }
+      });
+    }, 10 * 60 * 1000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(tokenSyncInterval);
+      void activeChannelPromise.then((ch) => {
+        if (ch) {
+          void client.removeChannel(ch);
+        }
+      });
+    };
+  }, [role]);
+
+  // Keep auth state synchronized across browser tabs
+  useEffect(() => {
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'clinic_staff_role') {
+        setRole(event.newValue);
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
 
   const signIn = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -54,7 +259,7 @@ export default function App() {
       setRole(data.user.role);
     } catch (signInError) {
       setError(signInError instanceof Error ? signInError.message : 'Unable to sign in.');
-      setPassword(''); // Clears the password field on failure
+      setPassword('');
     } finally {
       setLoading(false);
     }
@@ -84,19 +289,13 @@ export default function App() {
     }
   };
 
-  const signOut = () => {
-    ['access_token', 'refresh_token', 'supabase_access_token', 'supabase_token', 'role', 'name']
-      .forEach((key) => localStorage.removeItem(`clinic_staff_${key}`));
-    setUsername(''); // Clear username on sign out
-    setPassword(''); // Clear password on sign out
-    setRole(null);
-  };
-
   if (role === 'clinic_staff') {
     return (
       <ClinicStaffDashboard
         displayName={localStorage.getItem('clinic_staff_name') ?? username ?? 'Clinic Staff'}
         onLogout={signOut}
+        globalRealtimeStatus={globalRealtimeStatus}
+        latestGlobalEvent={latestGlobalEvent}
       />
     );
   }
@@ -132,7 +331,7 @@ export default function App() {
                 placeholder="Enter your username"
               />
             </div>
-           
+
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
               <label htmlFor="password" style={{ margin: 0 }}>Password</label>
               <button

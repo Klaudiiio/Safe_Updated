@@ -1,9 +1,8 @@
 try:
     import truststore
-
     truststore.inject_into_ssl()
 except ImportError:
-    pass
+    truststore = None
 
 
 from datetime import datetime, timedelta, timezone
@@ -36,8 +35,10 @@ DEFAULT_ADVISORY_MIN_MAGNITUDE = 3.0
 DEFAULT_ADVISORY_MIN_INTENSITY = "III"
 DEFAULT_MIN_FEED_MAGNITUDE = 4.0
 DEFAULT_HISTORY_MAX_AGE_DAYS = 30.0
+DEFAULT_ALERT_ACTIVE_SECONDS = 60.0
 DEFAULT_SUPABASE_PAGE_SIZE = 100
 MAX_SUPABASE_HISTORY_ROWS = 2000
+EARTHQUAKE_NOTIFICATION_AUDIENCES: tuple[str, ...] = ("admin", "clinic_staff")
 
 
 INTENSITY_ORDER: dict[str, int] = {
@@ -61,15 +62,11 @@ DEFAULT_THRESHOLD_BANDS: list[dict[str, Any]] = [
 ]
 
 
-
-
 def get_blind_zone_radius_km() -> float:
     return max(
         0.0,
         float(getattr(settings, "EARTHQUAKE_BLIND_ZONE_RADIUS_KM", DEFAULT_BLIND_ZONE_RADIUS_KM)),
     )
-
-
 
 
 def get_regional_radius_km() -> float:
@@ -82,15 +79,11 @@ def get_regional_radius_km() -> float:
     )
 
 
-
-
 def get_min_feed_magnitude() -> float:
     return max(
         0.0,
         float(getattr(settings, "EARTHQUAKE_MIN_FEED_MAGNITUDE", DEFAULT_MIN_FEED_MAGNITUDE)),
     )
-
-
 
 
 def get_history_max_age_days() -> float:
@@ -100,6 +93,11 @@ def get_history_max_age_days() -> float:
     )
 
 
+def get_alert_active_seconds() -> float:
+    return max(
+        1.0,
+        float(getattr(settings, "EARTHQUAKE_ALERT_ACTIVE_SECONDS", DEFAULT_ALERT_ACTIVE_SECONDS)),
+    )
 
 
 def get_threshold_bands() -> list[dict[str, Any]]:
@@ -107,8 +105,6 @@ def get_threshold_bands() -> list[dict[str, Any]]:
     if isinstance(configured, (list, tuple)) and configured:
         return list(configured)
     return list(DEFAULT_THRESHOLD_BANDS)
-
-
 
 
 def normalize_intensity(intensity: str | None) -> str | None:
@@ -145,15 +141,11 @@ def normalize_intensity(intensity: str | None) -> str | None:
     return None
 
 
-
-
 def intensity_rank(intensity: str | None) -> int:
     normalized = normalize_intensity(intensity)
     if not normalized:
         return 0
     return INTENSITY_ORDER.get(normalized, 0)
-
-
 
 
 def get_threshold_band_for_distance(
@@ -180,14 +172,10 @@ def get_threshold_band_for_distance(
     return None
 
 
-
-
 def get_ustp_cdo_coords() -> tuple[float, float]:
     lat = float(getattr(settings, "USTP_CDO_LAT", os.environ.get("USTP_CDO_LAT", DEFAULT_USTP_CDO_LAT)))
     lon = float(getattr(settings, "USTP_CDO_LON", os.environ.get("USTP_CDO_LON", DEFAULT_USTP_CDO_LON)))
     return lat, lon
-
-
 
 
 def calculate_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -204,15 +192,11 @@ def calculate_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) ->
     return round(earth_radius_km * c, 2)
 
 
-
-
 def _first_present(raw_item: dict[str, Any], keys: tuple[str, ...]) -> Any:
     for key in keys:
         if key in raw_item and raw_item[key] is not None and raw_item[key] != "":
             return raw_item[key]
     return None
-
-
 
 
 def parse_event_timestamp(raw_time: Any) -> datetime | None:
@@ -280,8 +264,6 @@ def parse_event_timestamp(raw_time: Any) -> datetime | None:
     return None
 
 
-
-
 def _build_external_event_id(raw_item: dict[str, Any], occurred_at: datetime, lat: float, lon: float) -> str | None:
     explicit_id = _first_present(raw_item, ("id", "external_event_id", "event_id", "bulletin_id", "eq_id"))
     if explicit_id:
@@ -292,8 +274,6 @@ def _build_external_event_id(raw_item: dict[str, Any], occurred_at: datetime, la
     fingerprint = f"phivolcs|{occurred_at.isoformat()}|{lat:.4f}|{lon:.4f}|{mag_val}"
     digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:16]
     return f"phivolcs:{digest}"
-
-
 
 
 def _extract_number(value: Any) -> float | None:
@@ -311,8 +291,6 @@ def _extract_number(value: Any) -> float | None:
     return None
 
 
-
-
 def _is_advisory_candidate(magnitude: float, reported_intensity: str | None) -> bool:
     advisory_min_mag = float(
         getattr(settings, "EARTHQUAKE_ADVISORY_MIN_MAGNITUDE", DEFAULT_ADVISORY_MIN_MAGNITUDE)
@@ -323,8 +301,6 @@ def _is_advisory_candidate(magnitude: float, reported_intensity: str | None) -> 
     return magnitude >= advisory_min_mag or intensity_rank(reported_intensity) >= intensity_rank(
         advisory_min_intensity
     )
-
-
 
 
 def classify_event(
@@ -366,6 +342,76 @@ def classify_event(
     return "monitoring"
 
 
+def is_alert_currently_active(
+    event: dict[str, Any],
+    now_utc: datetime | None = None,
+) -> bool:
+    """
+    Return True only when an event is classified as `earthquake_alert`, is not
+    acknowledged (when early acknowledgment stops alerting), and `now_utc < alert_expires_at`.
+    """
+    if not isinstance(event, dict):
+        return False
+
+    classification = str(event.get("classification") or "").strip().lower()
+    if classification != "earthquake_alert":
+        return False
+
+    if bool(event.get("acknowledged")):
+        return False
+
+    expires_at = parse_event_timestamp(event.get("alert_expires_at"))
+    if expires_at is None:
+        return False
+
+    current_utc = now_utc or dj_timezone.now().astimezone(timezone.utc)
+    return current_utc < expires_at
+
+
+def apply_alert_lifecycle_state(
+    event: dict[str, Any],
+    existing_row: dict[str, Any] | None = None,
+    now_utc: datetime | None = None,
+) -> dict[str, Any]:
+    """
+    Set `alert_detected_at` and `alert_expires_at` once when an `earthquake_alert`
+    is first detected (anchored to detection time, never `event_occurred_at`),
+    preserving existing timestamps on repeat syncs.
+    """
+    current_utc = now_utc or dj_timezone.now().astimezone(timezone.utc)
+    updated = dict(event)
+
+    existing_detected = parse_event_timestamp(
+        (existing_row or {}).get("alert_detected_at") or updated.get("alert_detected_at")
+    )
+    existing_expires = parse_event_timestamp(
+        (existing_row or {}).get("alert_expires_at") or updated.get("alert_expires_at")
+    )
+
+    classification = str(updated.get("classification") or "").strip().lower()
+    if classification == "earthquake_alert":
+        detected_dt = existing_detected or current_utc
+        expires_dt = existing_expires or (
+            detected_dt + timedelta(seconds=get_alert_active_seconds())
+        )
+        updated["alert_detected_at"] = detected_dt.isoformat()
+        updated["alert_expires_at"] = expires_dt.isoformat()
+    else:
+        updated["alert_detected_at"] = (
+            existing_detected.isoformat() if existing_detected else None
+        )
+        updated["alert_expires_at"] = (
+            existing_expires.isoformat() if existing_expires else None
+        )
+
+    acknowledged = bool(
+        (existing_row or {}).get("acknowledged")
+        if existing_row and "acknowledged" in existing_row
+        else updated.get("acknowledged", False)
+    )
+    updated["acknowledged"] = acknowledged
+    updated["alert_active"] = is_alert_currently_active(updated, now_utc=current_utc)
+    return updated
 
 
 def filter_events_for_feed(
@@ -384,8 +430,6 @@ def filter_events_for_feed(
     ]
 
 
-
-
 def is_simulation_event(event: dict[str, Any]) -> bool:
     """Return True when an earthquake event represents a software simulation test."""
     if not isinstance(event, dict):
@@ -397,8 +441,6 @@ def is_simulation_event(event: dict[str, Any]) -> bool:
     return source_val == "simulation test" or ext_id_val.startswith("sim:")
 
 
-
-
 def filter_events_for_hardware_alarm_sync(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Exclude Simulation Test records before syncing to physical/hardware alarm controllers.
@@ -406,6 +448,195 @@ def filter_events_for_hardware_alarm_sync(events: list[dict[str, Any]]) -> list[
     return [event for event in (events or []) if not is_simulation_event(event)]
 
 
+def build_hardware_alarm_state(
+    event: dict[str, Any] | None,
+    now_utc: datetime | None = None,
+) -> dict[str, Any]:
+    """
+    Return hardware alarm fields for a non-simulation event. Once expired or
+    acknowledged, turn buzzer/LED/alert_active off rather than re-triggering.
+    """
+    active = is_alert_currently_active(event, now_utc=now_utc) if event else False
+    if not active or not event:
+        return {
+            "alert_active": False,
+            "buzzer_enabled": False,
+            "led_enabled": False,
+            "alert_pattern": "none",
+        }
+
+    return {
+        "alert_active": True,
+        "buzzer_enabled": True,
+        "led_enabled": True,
+        "led_color": event.get("led_color") or "red",
+        "alert_pattern": event.get("alert_pattern") or "strobe",
+    }
+
+
+def _supabase_rest_headers(service_key: str, prefer: str | None = None) -> dict[str, str]:
+    headers = {
+        "apikey": service_key,
+        "Content-Type": "application/json",
+    }
+    if not service_key.startswith("sb_secret_"):
+        headers["Authorization"] = f"Bearer {service_key}"
+    if prefer:
+        headers["Prefer"] = prefer
+    return headers
+
+
+def _fetch_existing_monitoring_rows(
+    supabase_url: str,
+    service_key: str,
+    external_event_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Fetch existing alert lifecycle fields for given external_event_ids to preserve expiry."""
+    if not external_event_ids:
+        return {}
+
+    quoted_ids = ",".join(f'"{ext_id}"' for ext_id in external_event_ids)
+    response = requests.get(
+        f"{supabase_url}/rest/v1/earthquake_monitoring",
+        params={
+            "select": "external_event_id,alert_detected_at,alert_expires_at,alert_active,acknowledged",
+            "external_event_id": f"in.({quoted_ids})",
+        },
+        headers={
+            "apikey": service_key,
+            "Authorization": f"Bearer {service_key}" if not service_key.startswith("sb_secret_") else "",
+        }
+        if False
+        else _supabase_rest_headers(service_key),
+        timeout=10,
+    )
+    if not response.ok:
+        raise RuntimeError(
+            f"Supabase existing earthquake lookup failed ({response.status_code}): {response.text}"
+        )
+
+    payload = response.json()
+    if not isinstance(payload, list):
+        return {}
+
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in payload:
+        if isinstance(row, dict) and row.get("external_event_id"):
+            by_id[str(row["external_event_id"]).strip()] = row
+    return by_id
+
+
+def build_earthquake_notification_rows(
+    events: list[dict[str, Any]],
+    audiences: tuple[str, ...] = EARTHQUAKE_NOTIFICATION_AUDIENCES,
+) -> list[dict[str, Any]]:
+    """
+    Build deduplicated notification rows for `admin` and `clinic_staff` whenever
+    an event has `classification == "earthquake_alert"`.
+    """
+    rows: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    now_iso = dj_timezone.now().astimezone(timezone.utc).isoformat()
+
+    for event in events or []:
+        if not isinstance(event, dict):
+            continue
+        if str(event.get("classification") or "").strip().lower() != "earthquake_alert":
+            continue
+
+        ext_id = str(event.get("external_event_id") or event.get("id") or "").strip()
+        if not ext_id:
+            continue
+
+        mag_val = _extract_number(event.get("magnitude"))
+        mag_label = f"M{mag_val:.1f}" if mag_val is not None else "Earthquake"
+        place = str(event.get("place") or "Unknown Location").strip()
+        source = str(event.get("source") or "PHIVOLCS").strip()
+        dist_val = _extract_number(event.get("distance_from_cdo_km"))
+        dist_label = (
+            f"{dist_val:.1f} km from USTP CDO"
+            if dist_val is not None
+            else "Regional zone"
+        )
+        intensity = normalize_intensity(
+            event.get("reported_intensity")
+            if isinstance(event.get("reported_intensity"), str)
+            else (
+                str(event.get("reported_intensity"))
+                if event.get("reported_intensity") is not None
+                else None
+            )
+        )
+        intensity_label = f" | Intensity {intensity}" if intensity else ""
+
+        title = f"Earthquake Alert: {mag_label} — {place}"
+        message = (
+            f"[{source}] {mag_label} earthquake near {place} ({dist_label}{intensity_label}). "
+            f"Drop, Cover, and Hold On."
+        )
+
+        for audience in audiences:
+            aud = str(audience).strip()
+            if aud not in EARTHQUAKE_NOTIFICATION_AUDIENCES:
+                continue
+            dedup_key = f"eq_alert:{ext_id}:{aud}"
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+
+            rows.append(
+                {
+                    "incident_id": None,
+                    "notification_type": "earthquake_alert",
+                    "earthquake_event_id": ext_id,
+                    "title": title,
+                    "message": message,
+                    "audience": aud,
+                    "magnitude": round(mag_val, 1) if mag_val is not None else None,
+                    "place": place,
+                    "distance_from_cdo_km": round(dist_val, 2) if dist_val is not None else None,
+                    "dedup_key": dedup_key,
+                    "sent_at": now_iso,
+                }
+            )
+
+    return rows
+
+
+def create_earthquake_notifications_in_supabase(
+    events: list[dict[str, Any]],
+    audiences: tuple[str, ...] = EARTHQUAKE_NOTIFICATION_AUDIENCES,
+) -> int:
+    """
+    Upsert earthquake alert notifications into Supabase `public.notification` using
+    `dedup_key` so repeated feed refreshes or syncs do not create duplicates.
+    Returns the number of notification rows submitted.
+    """
+    rows = build_earthquake_notification_rows(events, audiences=audiences)
+    if not rows:
+        return 0
+
+    supabase_url = (getattr(settings, "SUPABASE_URL", None) or os.environ.get("SUPABASE_URL", "")).strip().rstrip("/")
+    service_key = (
+        getattr(settings, "SUPABASE_SERVICE_ROLE_KEY", None)
+        or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    ).strip()
+    if not supabase_url or not service_key:
+        return 0
+
+    response = requests.post(
+        f"{supabase_url}/rest/v1/notification?on_conflict=dedup_key",
+        headers=_supabase_rest_headers(
+            service_key,
+            prefer="resolution=ignore-duplicates,return=minimal",
+        ),
+        json=rows,
+        timeout=10,
+    )
+    if not response.ok:
+        raise RuntimeError(f"Supabase earthquake notification sync failed ({response.status_code}): {response.text}")
+
+    return len(rows)
 
 
 def create_and_sync_simulation_earthquake(
@@ -423,11 +654,14 @@ def create_and_sync_simulation_earthquake(
 ) -> dict[str, Any]:
     """
     Create a normalized simulation earthquake record (source='Simulation Test')
-    and persist it to Supabase via sync_earthquakes_to_supabase.
+    and persist it to Supabase via sync_earthquakes_to_supabase (which also
+    dispatches deduplicated admin + clinic_staff notifications when classified as
+    `earthquake_alert`, while excluding simulation events from hardware alarms).
     """
     now_utc = dj_timezone.now().astimezone(timezone.utc)
     occurred_iso = now_utc.isoformat()
     ext_id = f"sim:{now_utc.strftime('%Y%m%d%H%M%S')}:{uuid.uuid4().hex[:8]}"
+
 
     cdo_lat, cdo_lon = get_ustp_cdo_coords()
     lat = round(float(latitude), 4) if latitude is not None else round(cdo_lat, 4)
@@ -437,6 +671,7 @@ def create_and_sync_simulation_earthquake(
     mag = round(float(magnitude), 1)
     clean_place = str(place).strip() or "Simulated Seismic Zone, Cagayan de Oro"
     formatted_place = clean_place if clean_place.startswith("[SIMULATION]") else f"[SIMULATION] {clean_place}"
+
 
     normalized_event: dict[str, Any] = {
         "id": ext_id,
@@ -458,10 +693,9 @@ def create_and_sync_simulation_earthquake(
         "evaluated_at": occurred_iso,
     }
 
+
     sync_earthquakes_to_supabase([normalized_event])
     return normalized_event
-
-
 
 
 def validate_and_normalize_event(raw_item: dict[str, Any], now_utc: datetime | None = None) -> dict[str, Any] | None:
@@ -550,25 +784,26 @@ def validate_and_normalize_event(raw_item: dict[str, Any], now_utc: datetime | N
     url = str(url_raw).strip() if url_raw else "https://earthquake.phivolcs.dost.gov.ph/"
 
 
-    return {
-        "id": ext_id,
-        "external_event_id": ext_id,
-        "magnitude": round(mag, 1),
-        "place": place,
-        "latitude": round(lat, 4),
-        "longitude": round(lon, 4),
-        "depth_km": depth_km,
-        "distance_from_cdo_km": distance_km,
-        "reported_intensity": reported_intensity,
-        "classification": classification,
-        "source": "PHIVOLCS",
-        "url": url,
-        "event_occurred_at": occurred_at.isoformat(),
-        "time": int(occurred_at.timestamp() * 1000),
-        "evaluated_at": evaluated_at.isoformat(),
-    }
-
-
+    return apply_alert_lifecycle_state(
+        {
+            "id": ext_id,
+            "external_event_id": ext_id,
+            "magnitude": round(mag, 1),
+            "place": place,
+            "latitude": round(lat, 4),
+            "longitude": round(lon, 4),
+            "depth_km": depth_km,
+            "distance_from_cdo_km": distance_km,
+            "reported_intensity": reported_intensity,
+            "classification": classification,
+            "source": "PHIVOLCS",
+            "url": url,
+            "event_occurred_at": occurred_at.isoformat(),
+            "time": int(occurred_at.timestamp() * 1000),
+            "evaluated_at": evaluated_at.isoformat(),
+        },
+        now_utc=current_utc,
+    )
 
 
 def _extract_items_from_payload(payload: Any) -> list[dict[str, Any]]:
@@ -588,8 +823,6 @@ def _extract_items_from_payload(payload: Any) -> list[dict[str, Any]]:
 
 
     return []
-
-
 
 
 def _parse_html_table_events(html_text: str) -> list[dict[str, Any]]:
@@ -630,8 +863,6 @@ def _parse_html_table_events(html_text: str) -> list[dict[str, Any]]:
     return events
 
 
-
-
 def _fetch_phivolcs_response(feed_url: str) -> requests.Response:
     retries = max(0, int(getattr(settings, "PHIVOLCS_FETCH_RETRIES", 2)))
     connect_timeout = float(getattr(settings, "PHIVOLCS_CONNECT_TIMEOUT", 5.0))
@@ -664,8 +895,6 @@ def _fetch_phivolcs_response(feed_url: str) -> requests.Response:
     raise last_exc
 
 
-
-
 def fetch_phivolcs_raw_events() -> list[dict[str, Any]]:
     """
     Fetch raw PHIVOLCS earthquake items from configured PHIVOLCS source.
@@ -689,8 +918,6 @@ def fetch_phivolcs_raw_events() -> list[dict[str, Any]]:
         return _parse_html_table_events(resp.text)
 
 
-
-
 def get_evaluated_earthquakes(raw_items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     source_items = raw_items if raw_items is not None else fetch_phivolcs_raw_events()
     now_utc = dj_timezone.now().astimezone(timezone.utc)
@@ -703,9 +930,10 @@ def get_evaluated_earthquakes(raw_items: list[dict[str, Any]] | None = None) -> 
     return normalized
 
 
-
-
-def _normalize_persisted_row(row: dict[str, Any]) -> dict[str, Any] | None:
+def _normalize_persisted_row(
+    row: dict[str, Any],
+    now_utc: datetime | None = None,
+) -> dict[str, Any] | None:
     """Normalize a row from Supabase public.earthquake_monitoring into the API event shape."""
     if not isinstance(row, dict):
         return None
@@ -758,9 +986,13 @@ def _normalize_persisted_row(row: dict[str, Any]) -> dict[str, Any] | None:
     )
 
 
+    current_utc = now_utc or dj_timezone.now().astimezone(timezone.utc)
     evaluated_dt = parse_event_timestamp(row.get("evaluated_at"))
     evaluated_at = evaluated_dt.isoformat() if evaluated_dt else occurred_at.isoformat()
 
+    detected_dt = parse_event_timestamp(row.get("alert_detected_at"))
+    expires_dt = parse_event_timestamp(row.get("alert_expires_at"))
+    acknowledged = bool(row.get("acknowledged", False))
 
     event_dict: dict[str, Any] = {
         "id": ext_id,
@@ -776,7 +1008,12 @@ def _normalize_persisted_row(row: dict[str, Any]) -> dict[str, Any] | None:
         "event_occurred_at": occurred_at.isoformat(),
         "time": int(occurred_at.timestamp() * 1000),
         "evaluated_at": evaluated_at,
+        "alert_detected_at": detected_dt.isoformat() if detected_dt else None,
+        "alert_expires_at": expires_dt.isoformat() if expires_dt else None,
+        "acknowledged": acknowledged,
     }
+    event_dict["alert_active"] = is_alert_currently_active(event_dict, now_utc=current_utc)
+
     if lat_val is not None:
         event_dict["latitude"] = round(lat_val, 4)
     if lon_val is not None:
@@ -784,8 +1021,6 @@ def _normalize_persisted_row(row: dict[str, Any]) -> dict[str, Any] | None:
 
 
     return event_dict
-
-
 
 
 def fetch_earthquakes_from_supabase(limit: int | None = None) -> list[dict[str, Any]]:
@@ -825,7 +1060,8 @@ def fetch_earthquakes_from_supabase(limit: int | None = None) -> list[dict[str, 
             params={
                 "select": (
                     "id,external_event_id,magnitude,place,depth_km,distance_from_cdo_km,"
-                    "reported_intensity,classification,source,event_occurred_at,evaluated_at"
+                    "reported_intensity,classification,source,event_occurred_at,evaluated_at,"
+                    "alert_detected_at,alert_expires_at,alert_active,acknowledged"
                 ),
                 "event_occurred_at": f"gte.{cutoff_iso}",
                 "order": "event_occurred_at.desc",
@@ -863,7 +1099,7 @@ def fetch_earthquakes_from_supabase(limit: int | None = None) -> list[dict[str, 
         occurred_at = parse_event_timestamp(row.get("event_occurred_at"))
         if occurred_at is None or occurred_at < cutoff_dt:
             continue
-        parsed = _normalize_persisted_row(row)
+        parsed = _normalize_persisted_row(row, now_utc=now_utc)
         if parsed is not None:
             normalized.append(parsed)
 
@@ -872,13 +1108,11 @@ def fetch_earthquakes_from_supabase(limit: int | None = None) -> list[dict[str, 
     return normalized
 
 
-
-
 def sync_alert_hardware_state(events: list[dict[str, Any]]) -> None:
     """
-    Update server-side alert output state when an active earthquake_alert is present,
-    explicitly ignoring Simulation Test records so software simulations cannot trigger
-    physical alarm hardware.
+    Update server-side alert output state when an active (non-expired, unacknowledged)
+    earthquake_alert is present, explicitly ignoring Simulation Test records and
+    turning hardware outputs off once alerts expire.
     """
     supabase_url = (getattr(settings, "SUPABASE_URL", None) or os.environ.get("SUPABASE_URL", "")).rstrip("/")
     service_key = getattr(settings, "SUPABASE_SERVICE_ROLE_KEY", None) or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -887,31 +1121,34 @@ def sync_alert_hardware_state(events: list[dict[str, Any]]) -> None:
         return
 
 
+    now_utc = dj_timezone.now().astimezone(timezone.utc)
     hardware_events = filter_events_for_hardware_alarm_sync(events)
-    latest_alert = next((e for e in hardware_events if e.get("classification") == "earthquake_alert"), None)
-    now_iso = dj_timezone.now().astimezone(timezone.utc).isoformat()
-
+    active_alert = next(
+        (e for e in hardware_events if is_alert_currently_active(e, now_utc=now_utc)),
+        None,
+    )
+    alarm_state = build_hardware_alarm_state(active_alert, now_utc=now_utc)
+    now_iso = now_utc.isoformat()
 
     payload = {
         "device_id": getattr(settings, "EARTHQUAKE_HARDWARE_DEVICE_ID", "clinic-alarm-controller"),
-        "alert_active": latest_alert is not None,
-        "acknowledged": False if latest_alert is not None else True,
-        "active_event_id": latest_alert.get("external_event_id") if latest_alert else None,
-        "classification": latest_alert.get("classification") if latest_alert else "monitoring",
-        "buzzer_enabled": latest_alert is not None,
-        "led_enabled": latest_alert is not None,
+        "alert_active": alarm_state["alert_active"],
+        "acknowledged": False if active_alert is not None else True,
+        "active_event_id": active_alert.get("external_event_id") if active_alert else None,
+        "classification": active_alert.get("classification") if active_alert else "monitoring",
+        "buzzer_enabled": alarm_state["buzzer_enabled"],
+        "led_enabled": alarm_state["led_enabled"],
+        "alert_pattern": alarm_state["alert_pattern"],
         "updated_at": now_iso,
     }
 
 
     response = requests.post(
         f"{supabase_url}/rest/v1/{table_name}?on_conflict=device_id",
-        headers={
-            "apikey": service_key,
-            "Authorization": f"Bearer {service_key}",
-            "Content-Type": "application/json",
-            "Prefer": "resolution=merge-duplicates,return=minimal",
-        },
+        headers=_supabase_rest_headers(
+            service_key,
+            prefer="resolution=merge-duplicates,return=minimal",
+        ),
         json=payload,
         timeout=10,
     )
@@ -919,13 +1156,12 @@ def sync_alert_hardware_state(events: list[dict[str, Any]]) -> None:
         raise RuntimeError(f"Supabase hardware state sync failed ({response.status_code}): {response.text}")
 
 
-
-
 def sync_earthquakes_to_supabase(events: list[dict[str, Any]]) -> None:
     """
     Upsert validated earthquake event fields into public.earthquake_monitoring keyed on
-    external_event_id while omitting alert/acknowledgment state fields so staff
-    acknowledgments and hardware controls are preserved.
+    external_event_id while preserving existing `alert_detected_at`, `alert_expires_at`,
+    and `acknowledged` state across repeat syncs, and create deduplicated notifications
+    for `admin` and `clinic_staff` when `classification == "earthquake_alert"`.
     """
     supabase_url = (getattr(settings, "SUPABASE_URL", None) or os.environ.get("SUPABASE_URL", "")).rstrip("/")
     service_key = getattr(settings, "SUPABASE_SERVICE_ROLE_KEY", None) or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -933,7 +1169,16 @@ def sync_earthquakes_to_supabase(events: list[dict[str, Any]]) -> None:
         return
 
 
+    now_utc = dj_timezone.now().astimezone(timezone.utc)
+    candidate_ids = [
+        str(ev.get("external_event_id") or ev.get("id")).strip()
+        for ev in events
+        if (ev.get("external_event_id") or ev.get("id")) and ev.get("event_occurred_at")
+    ]
+    existing_by_id = _fetch_existing_monitoring_rows(supabase_url, service_key, candidate_ids)
+
     rows_by_ext_id: dict[str, dict[str, Any]] = {}
+    synced_events: list[dict[str, Any]] = []
     for event in events:
         ext_id = event.get("external_event_id") or event.get("id")
         occurred_at = event.get("event_occurred_at")
@@ -942,18 +1187,28 @@ def sync_earthquakes_to_supabase(events: list[dict[str, Any]]) -> None:
 
 
         key = str(ext_id).strip()
+        lifecycle_event = apply_alert_lifecycle_state(
+            event,
+            existing_row=existing_by_id.get(key),
+            now_utc=now_utc,
+        )
         rows_by_ext_id[key] = {
             "external_event_id": key,
-            "magnitude": event.get("magnitude"),
-            "place": event.get("place"),
-            "depth_km": event.get("depth_km"),
-            "distance_from_cdo_km": event.get("distance_from_cdo_km"),
-            "reported_intensity": event.get("reported_intensity"),
-            "classification": event.get("classification", "monitoring"),
-            "source": event.get("source", "PHIVOLCS"),
+            "magnitude": lifecycle_event.get("magnitude"),
+            "place": lifecycle_event.get("place"),
+            "depth_km": lifecycle_event.get("depth_km"),
+            "distance_from_cdo_km": lifecycle_event.get("distance_from_cdo_km"),
+            "reported_intensity": lifecycle_event.get("reported_intensity"),
+            "classification": lifecycle_event.get("classification", "monitoring"),
+            "source": lifecycle_event.get("source", "PHIVOLCS"),
             "event_occurred_at": occurred_at,
-            "evaluated_at": event.get("evaluated_at") or dj_timezone.now().astimezone(timezone.utc).isoformat(),
+            "evaluated_at": lifecycle_event.get("evaluated_at") or now_utc.isoformat(),
+            "alert_detected_at": lifecycle_event.get("alert_detected_at"),
+            "alert_expires_at": lifecycle_event.get("alert_expires_at"),
+            "alert_active": lifecycle_event.get("alert_active", False),
+            "acknowledged": lifecycle_event.get("acknowledged", False),
         }
+        synced_events.append(lifecycle_event)
 
 
     rows = list(rows_by_ext_id.values())
@@ -963,12 +1218,10 @@ def sync_earthquakes_to_supabase(events: list[dict[str, Any]]) -> None:
 
     response = requests.post(
         f"{supabase_url}/rest/v1/earthquake_monitoring?on_conflict=external_event_id",
-        headers={
-            "apikey": service_key,
-            "Authorization": f"Bearer {service_key}",
-            "Content-Type": "application/json",
-            "Prefer": "resolution=merge-duplicates,return=minimal",
-        },
+        headers=_supabase_rest_headers(
+            service_key,
+            prefer="resolution=merge-duplicates,return=minimal",
+        ),
         json=rows,
         timeout=10,
     )
@@ -976,7 +1229,9 @@ def sync_earthquakes_to_supabase(events: list[dict[str, Any]]) -> None:
         raise RuntimeError(f"Supabase earthquake sync failed ({response.status_code}): {response.text}")
 
 
+    create_earthquake_notifications_in_supabase(synced_events)
+
+
     if getattr(settings, "ENABLE_EARTHQUAKE_HARDWARE_SYNC", False):
-        hardware_events = filter_events_for_hardware_alarm_sync(events)
-        if hardware_events:
-            sync_alert_hardware_state(hardware_events)
+        hardware_events = filter_events_for_hardware_alarm_sync(synced_events)
+        sync_alert_hardware_state(hardware_events)

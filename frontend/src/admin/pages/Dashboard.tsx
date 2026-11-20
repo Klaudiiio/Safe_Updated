@@ -1,12 +1,14 @@
 import { useState, useMemo } from 'react';
-import { Activity, AlertCircle, Users, TrendingUp, MapPin, Camera, ClipboardList, Filter } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Activity, AlertCircle, Users, TrendingUp, MapPin, Camera, ClipboardList, Filter, BellRing } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
 import { IncidentCard } from '../components/IncidentCard';
 import { ResponderCard } from '../components/ResponderCard';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { DataNotice } from '../DataNotice';
-import { useAdminData } from '../useAdminData';
+import { useAdminData, type EarthquakeAlertRecord } from '../useAdminData';
 import type { Incident } from '../data/mockData';
 
 function buildDailyIncidentCounts(incidents: Incident[], currentDate: Date) {
@@ -22,14 +24,27 @@ function buildDailyIncidentCounts(incidents: Incident[], currentDate: Date) {
 }
 
 export function Dashboard() {
-  const { incidents, responders, updateIncidentStatus, loading, error } = useAdminData();
+  const {
+    incidents,
+    responders,
+    earthquakeAlerts,
+    updateIncidentStatus,
+    loading,
+    error,
+  } = useAdminData() as any;
   const [currentDate] = useState(() => new Date());
+  const [dismissedAlertIds, setDismissedAlertIds] = useState<Record<string, boolean>>({});
 
   // Status filter state for the incident feed
   const [feedStatusFilter, setFeedStatusFilter] = useState<'all' | 'pending' | 'active' | 'assigned' | 'resolved'>('all');
 
+  const activeEarthquakeAlerts: EarthquakeAlertRecord[] = useMemo(() => {
+    const list: EarthquakeAlertRecord[] = Array.isArray(earthquakeAlerts) ? earthquakeAlerts : [];
+    return list.filter((eq) => !dismissedAlertIds[String(eq.external_event_id || eq.id)]);
+  }, [earthquakeAlerts, dismissedAlertIds]);
+
   // Map any legacy 'responding' status to 'assigned'
-  const normalizedIncidents = incidents.map(i => ({
+  const normalizedIncidents = incidents.map((i: Incident) => ({
     ...i,
     status: i.status?.toLowerCase() === 'responding' ? 'assigned' : i.status
   }));
@@ -62,33 +77,94 @@ export function Dashboard() {
 
   // Keep activeIncidents for statistics and counter badges (excluding resolved/completed/cancelled)
   const activeIncidents = useMemo(() => {
-    return normalizedIncidents.filter(i => {
+    return normalizedIncidents.filter((i: Incident) => {
       const status = i.status?.toLowerCase() || '';
       return !['resolved', 'completed', 'cancelled'].includes(status);
     });
   }, [normalizedIncidents]);
 
   // Synced with Responders tab availability criteria checking both properties safely
-  const availableResponders = responders.filter(r => {
+  const availableResponders = responders.filter((r: any) => {
     const statusStr = ((r as any).status || (r as any).availability_status || '').toLowerCase();
     return statusStr === 'available';
   });
- 
-  const pendingReports = normalizedIncidents.filter(i => (i.status?.toLowerCase() || '') === 'pending').length;
-  const assignedReports = normalizedIncidents.filter(i => ['assigned', 'accepted'].includes(i.status?.toLowerCase() || '')).length;
- 
+
+  const pendingReports = normalizedIncidents.filter((i: Incident) => (i.status?.toLowerCase() || '') === 'pending').length;
+  const assignedReports = normalizedIncidents.filter((i: Incident) => ['assigned', 'accepted'].includes(i.status?.toLowerCase() || '')).length;
+
   const dailyIncidents = buildDailyIncidentCounts(normalizedIncidents, currentDate);
-  const incidentTypeCounts = normalizedIncidents.reduce<{ type: string; count: number }[]>((counts, incident) => {
-    const existing = counts.find((item) => item.type === incident.type);
-    if (existing) existing.count += 1;
-    else counts.push({ type: incident.type, count: 1 });
-    return counts;
-  }, []);
+  const incidentTypeCounts = useMemo(() => {
+  const map = new Map<string, number>();
+  for (const incident of normalizedIncidents) {
+    const key = String(incident.type || 'Unknown');
+    map.set(key, (map.get(key) ?? 0) + 1);
+  }
+  return Array.from(map.entries()).map(([type, count]) => ({ type, count }));
+}, [normalizedIncidents]);
 
   return (
     <div className="space-y-6">
       <DataNotice loading={loading} error={error} />
-     
+
+      {/* Active Earthquake Alert Banner */}
+      {activeEarthquakeAlerts.length > 0 && (
+        <Card className="bg-rose-50 border-2 border-rose-500 shadow-md p-4 rounded-2xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 animate-pulse">
+                <BellRing className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge className="bg-rose-600 text-white text-[10px] font-extrabold uppercase tracking-wider">
+                    Active Earthquake Alert
+                  </Badge>
+                  <span className="text-xs font-bold text-rose-800">
+                    {activeEarthquakeAlerts[0].source || 'PHIVOLCS'}
+                  </span>
+                </div>
+                <p className="text-sm font-extrabold text-slate-900 mt-0.5">
+                  {activeEarthquakeAlerts[0].title ||
+                    `Magnitude ${
+                      activeEarthquakeAlerts[0].magnitude != null
+                        ? `M${Number(activeEarthquakeAlerts[0].magnitude).toFixed(1)}`
+                        : 'Alert'
+                    } — ${activeEarthquakeAlerts[0].place}`}
+                </p>
+                <p className="text-xs text-slate-700 font-medium">
+                  {activeEarthquakeAlerts[0].place}
+                  {activeEarthquakeAlerts[0].distance_from_cdo_km != null
+                    ? ` • ${Number(activeEarthquakeAlerts[0].distance_from_cdo_km).toFixed(1)} km from USTP CDO`
+                    : ''}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <Link to="/notifications">
+                <Button size="sm" className="bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl cursor-pointer">
+                  Inspect Alerts
+                </Button>
+              </Link>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  setDismissedAlertIds((prev) => ({
+                    ...prev,
+                    [String(activeEarthquakeAlerts[0].external_event_id || activeEarthquakeAlerts[0].id)]: true,
+                  }))
+                }
+                className="bg-white text-rose-700 border-rose-200 hover:bg-rose-100 text-xs font-bold rounded-xl cursor-pointer"
+              >
+                Dismiss
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Page Header */}
       <div className="mb-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-sky-100 shadow-sm">
         <h1 className="text-2xl font-extrabold text-slate-900 mb-1">SAFE Medical Emergency Monitoring Center</h1>
@@ -217,7 +293,7 @@ export function Dashboard() {
               </div>
             </div>
             <div className="space-y-3">
-              {activeIncidents.slice(0, 5).map((incident) => (
+              {activeIncidents.slice(0, 5).map((incident: Incident) => (
                 <div key={incident.id} className="flex items-center justify-between rounded-xl border border-sky-100 bg-sky-50/40 p-3.5">
                   <div className="flex items-start gap-3 min-w-0">
                     <MapPin className="mt-0.5 h-4 w-4 text-sky-600 shrink-0" />
@@ -273,7 +349,7 @@ export function Dashboard() {
             <div className="mt-6 pt-6 border-t border-slate-100">
               <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">Common Medical Incidents</h3>
               <div className="space-y-3">
-                {incidentTypeCounts.map((item) => (
+                {incidentTypeCounts.map((item: { type: string; count: number }) => (
                   <div key={item.type} className="flex items-center gap-3">
                     <div className="flex-1 flex items-center gap-3">
                       <span className="text-sm font-medium text-slate-700 w-32 truncate">{item.type}</span>
@@ -314,7 +390,7 @@ export function Dashboard() {
               </Badge>
             </div>
             <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
-              {availableResponders.map((responder) => (
+              {availableResponders.map((responder: any) => (
                 <ResponderCard
                   key={responder.id}
                   responder={responder}

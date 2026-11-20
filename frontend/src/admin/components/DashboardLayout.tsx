@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Outlet, Link, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   AlertCircle,
@@ -21,7 +21,9 @@ import {
   Phone,
   Edit3,
   Save,
-  ArrowLeft
+  ArrowLeft,
+  Activity,
+  MapPin,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -36,7 +38,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
-import { useAdminData } from '../useAdminData';
+import {
+  useAdminData,
+  getAlertExpiresAtMs,
+  isEarthquakeAlertActive,
+  type EarthquakeAlertRecord,
+} from '../useAdminData';
 import { fetchAdminProfile, updateAdminProfile, changeAdminPassword } from '../api';
 
 const menuItems = [
@@ -54,11 +61,43 @@ interface DashboardLayoutProps {
   onLogout: () => void;
 }
 
+const triggerBrowserEarthquakeNotification = (alert: EarthquakeAlertRecord) => {
+  try {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    const title =
+      alert.title ||
+      `Earthquake Alert: ${alert.magnitude != null ? `M${alert.magnitude.toFixed(1)}` : 'Alert'} — ${alert.place}`;
+    const body =
+      alert.message ||
+      `${alert.place}${
+        alert.distance_from_cdo_km != null ? ` (${alert.distance_from_cdo_km.toFixed(1)} km from USTP CDO)` : ''
+      }`;
+
+    if (Notification.permission === 'granted') {
+      new Notification(title, { body, tag: `eq-alert-${alert.external_event_id}` });
+    } else if (Notification.permission !== 'denied') {
+      void Notification.requestPermission().then((perm) => {
+        if (perm === 'granted') {
+          new Notification(title, { body, tag: `eq-alert-${alert.external_event_id}` });
+        }
+      });
+    }
+  } catch {
+    // Ignore browser notification errors in restricted contexts
+  }
+};
+
 export function DashboardLayout({ displayName: initialDisplayName, onLogout }: DashboardLayoutProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const [isRinging, setIsRinging] = useState(false);
+  const [isEarthquakeRinging, setIsEarthquakeRinging] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+
+  // Selected earthquake event for inspecting history or active modal
+  const [selectedEarthquakeModal, setSelectedEarthquakeModal] = useState<EarthquakeAlertRecord | null>(null);
+  const [dismissedEarthquakeIds, setDismissedEarthquakeIds] = useState<Set<string>>(() => new Set());
+  const seenEarthquakeModalIdsRef = useRef<Set<string>>(new Set());
 
   // Modal navigation view state: 'view' | 'edit-profile' | 'edit-password'
   const [modalView, setModalView] = useState<'view' | 'edit-profile' | 'edit-password'>('view');
@@ -96,12 +135,102 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
 
   // Safe location fallback in case router context is momentarily absent during hot reloads
   const location = useLocation();
+  const navigate = useNavigate();
   const currentPath = location?.pathname || '/';
 
   const initials = (displayName || 'Admin').slice(0, 2).toUpperCase();
 
-  // Fetch live notifications and incidents directly from Supabase via useAdminData
-  const { notifications: rawNotifications, incidents, markNotificationAsRead } = useAdminData() as any;
+  // Fetch live notifications, earthquake alerts, and incidents directly from Supabase via useAdminData
+  const {
+    notifications: rawNotifications,
+    earthquakeAlerts: rawEarthquakeAlerts,
+    incidents,
+    markNotificationAsRead,
+    dismissEarthquakeAlert: hookDismissEarthquakeAlert,
+    acknowledgeEarthquakeAlert,
+    stopEarthquakeAlertAudio,
+  } = useAdminData() as any;
+
+  // Full history feed of earthquake alerts
+  const earthquakeAlerts: EarthquakeAlertRecord[] = useMemo(() => {
+    const list: EarthquakeAlertRecord[] = Array.isArray(rawEarthquakeAlerts) ? rawEarthquakeAlerts : [];
+    const seen = new Set<string>();
+    return list
+      .filter((item) => {
+        if (!item) return false;
+        const key = String(item.external_event_id || item.id);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map((item) => ({
+        ...item,
+        external_event_id: String(item.external_event_id || item.id),
+      }));
+  }, [rawEarthquakeAlerts]);
+
+  // 1-second tick while any unacknowledged, undismissed alert has a future alert_expires_at
+  const nowMs = now.getTime();
+
+  useEffect(() => {
+    const hasPendingExpiration = earthquakeAlerts.some((eq) => {
+      if (String(eq.classification ?? '').trim().toLowerCase() !== 'earthquake_alert') {
+        return false;
+      }
+      if (Boolean(eq.acknowledged) || eq.alert_active === false) return false;
+      const key = String(eq.external_event_id || eq.id || '').trim();
+      if (key && dismissedEarthquakeIds.has(key)) return false;
+      const expiresAtMs = getAlertExpiresAtMs(eq);
+      return expiresAtMs !== null && Date.now() < expiresAtMs;
+    });
+
+    const intervalMs = hasPendingExpiration ? 1000 : 60_000;
+    setNow(new Date());
+    const timer = setInterval(() => setNow(new Date()), intervalMs);
+    return () => clearInterval(timer);
+  }, [earthquakeAlerts, dismissedEarthquakeIds]);
+
+  // Active alerts computed dynamically against nowMs and alert_expires_at
+  const activeEarthquakeAlerts: EarthquakeAlertRecord[] = useMemo(() => {
+    return earthquakeAlerts.filter((eq) =>
+      isEarthquakeAlertActive(eq, nowMs, dismissedEarthquakeIds)
+    );
+  }, [earthquakeAlerts, nowMs, dismissedEarthquakeIds]);
+
+  const latestActiveEarthquakeAlert: EarthquakeAlertRecord | null =
+    activeEarthquakeAlerts.length > 0 ? activeEarthquakeAlerts[0] : null;
+
+  const isEarthquakeAlertModalOpen = Boolean(latestActiveEarthquakeAlert);
+  const displayedEarthquakeModal: EarthquakeAlertRecord | null = useMemo(() => {
+    if (latestActiveEarthquakeAlert) {
+      return latestActiveEarthquakeAlert;
+    }
+    if (
+      selectedEarthquakeModal &&
+      isEarthquakeAlertActive(selectedEarthquakeModal, nowMs, dismissedEarthquakeIds)
+    ) {
+      return selectedEarthquakeModal;
+    }
+    return null;
+  }, [
+    latestActiveEarthquakeAlert,
+    selectedEarthquakeModal,
+    nowMs,
+    dismissedEarthquakeIds,
+  ]);
+
+  // Clear stale modal selection and stop audio as soon as active alert expires, is dismissed, or is acknowledged
+  useEffect(() => {
+    if (!displayedEarthquakeModal) {
+      setSelectedEarthquakeModal(null);
+      setIsEarthquakeRinging(false);
+      if (typeof stopEarthquakeAlertAudio === 'function') {
+        stopEarthquakeAlertAudio();
+      }
+    }
+  }, [displayedEarthquakeModal, stopEarthquakeAlertAudio]);
+
+  const unreadEarthquakeCount = activeEarthquakeAlerts.length;
 
   // Local state to manage read/unread states instantly in the UI dropdown
   const [readMap, setReadMap] = useState<Record<string, boolean>>({});
@@ -127,22 +256,52 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
     }).map((n: Record<string, any>, index: number) => {
       const id = String(n.notification_id || n.id || index + 1);
       const isRead = readMap[id] ?? (String(n.status || '').toLowerCase() === 'read' || Boolean(n.is_read || n.read));
-     
+
+      const isEarthquakeNotif =
+        String(n.type || '').toLowerCase() === 'earthquake_alert' ||
+        String(n.classification || '').toLowerCase() === 'earthquake_alert' ||
+        Boolean(n.earthquake_event_id);
+
       const incidentId = n.incident_id || n.incidentId;
       const matchingIncident = incidents?.find(
         (inc: any) => String(inc.id || inc.incident_id) === String(incidentId)
       );
 
-      // 1. Build notification title from matchingIncident.type with fallback to incident-type field
-      const title = 
-        matchingIncident?.type || 
-        matchingIncident?.incident_types?.incident_name || 
-        matchingIncident?.incident_name || 
-        n.title || 
-        'Incident';
+      // 1. Build notification title from matchingIncident.type with fallback to notification/incident-type field
+      const title =
+        n.title ||
+        matchingIncident?.type ||
+        matchingIncident?.incident_types?.incident_name ||
+        matchingIncident?.incident_name ||
+        (isEarthquakeNotif ? 'Earthquake Alert' : 'Incident');
+
+      if (isEarthquakeNotif) {
+        const magText = n.magnitude != null ? `M${Number(n.magnitude).toFixed(1)} ` : '';
+        const placeText = n.place || 'Regional Zone';
+        const distText =
+          n.distance_from_cdo_km != null
+            ? ` (${Number(n.distance_from_cdo_km).toFixed(1)} km from USTP CDO)`
+            : '';
+        const message =
+          n.message || `${magText}earthquake near ${placeText}${distText}`;
+        const timeValue = n.sent_at || n.sentAt || n.created_at;
+        const time = timeValue
+          ? new Date(timeValue).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : 'Recent';
+
+        return {
+          id,
+          title,
+          message,
+          time,
+          path: '/notifications',
+          isRead,
+          severity: 'critical',
+        };
+      }
 
       // 2. Show reporter username using matchingIncident.reporterUsername (supplied by liveData.ts)
-      const rawReporter = 
+      const rawReporter =
         matchingIncident?.reporterUsername ||
         matchingIncident?.reporter_username ||
         matchingIncident?.reporter_name ||
@@ -155,9 +314,9 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
 
       const cleanReporter = typeof rawReporter === 'string' ? rawReporter.trim() : '';
       const lowerReporter = cleanReporter.toLowerCase();
-      const isAnonymous = 
-        !cleanReporter || 
-        lowerReporter === 'anonymous' || 
+      const isAnonymous =
+        !cleanReporter ||
+        lowerReporter === 'anonymous' ||
         lowerReporter === 'none' ||
         lowerReporter === 'admin' ||
         /^user\s*\d*$/i.test(lowerReporter);
@@ -216,6 +375,69 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
       }
     });
     setReadMap(newMap);
+  };
+
+  const dismissEarthquakeAlert = (eventId: string) => {
+    const cleanId = String(eventId || '').trim();
+    if (typeof stopEarthquakeAlertAudio === 'function') {
+      stopEarthquakeAlertAudio();
+    }
+    setIsEarthquakeRinging(false);
+    setDismissedEarthquakeIds((prev) => {
+      const next = new Set(prev);
+      next.add(cleanId);
+      return next;
+    });
+    if (typeof hookDismissEarthquakeAlert === 'function') {
+      hookDismissEarthquakeAlert(cleanId);
+    }
+    if (
+      selectedEarthquakeModal &&
+      String(selectedEarthquakeModal.external_event_id || selectedEarthquakeModal.id) === cleanId
+    ) {
+      setSelectedEarthquakeModal(null);
+    }
+  };
+
+  const handleAcknowledgeEarthquake = async (eq: EarthquakeAlertRecord) => {
+    const eventId = String(eq.external_event_id || eq.id || '').trim();
+    if (typeof stopEarthquakeAlertAudio === 'function') {
+      stopEarthquakeAlertAudio();
+    }
+    setIsEarthquakeRinging(false);
+    setDismissedEarthquakeIds((prev) => {
+      const next = new Set(prev);
+      next.add(eventId);
+      return next;
+    });
+    if (
+      selectedEarthquakeModal &&
+      String(selectedEarthquakeModal.external_event_id || selectedEarthquakeModal.id) === eventId
+    ) {
+      setSelectedEarthquakeModal(null);
+    }
+    if (typeof acknowledgeEarthquakeAlert === 'function') {
+      await acknowledgeEarthquakeAlert(eventId);
+    }
+  };
+
+  const dismissAllEarthquakeAlerts = async () => {
+    if (typeof stopEarthquakeAlertAudio === 'function') {
+      stopEarthquakeAlertAudio();
+    }
+    setIsEarthquakeRinging(false);
+    const nextDismissed = new Set(dismissedEarthquakeIds);
+    for (const eq of activeEarthquakeAlerts) {
+      const eqId = String(eq.external_event_id || eq.id || '').trim();
+      if (eqId) {
+        nextDismissed.add(eqId);
+        if (typeof acknowledgeEarthquakeAlert === 'function') {
+          await acknowledgeEarthquakeAlert(eqId);
+        }
+      }
+    }
+    setDismissedEarthquakeIds(nextDismissed);
+    setSelectedEarthquakeModal(null);
   };
 
   // Handle saving profile changes through Django backend & Supabase sync
@@ -300,24 +522,84 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
     }
   };
 
-  // Listen for real-time alert events from useAdminData to animate bell ringing
+  // Listen for real-time alert events from useAdminData to animate bell ringing & open earthquake alert modal
   useEffect(() => {
+    let ringTimer: ReturnType<typeof setTimeout> | undefined;
+    let eqRingTimer: ReturnType<typeof setTimeout> | undefined;
+
     const handleNewAlert = () => {
       setIsRinging(true);
-      const timer = setTimeout(() => setIsRinging(false), 2500);
-      return () => clearTimeout(timer);
+      if (ringTimer) clearTimeout(ringTimer);
+      ringTimer = setTimeout(() => setIsRinging(false), 2500);
+    };
+
+    const handleNewEarthquakeAlert = (event: Event) => {
+      const customEvent = event as CustomEvent<any>;
+      const raw = customEvent?.detail;
+      if (!raw) return;
+
+      const eventId = String(raw.earthquake_event_id || raw.external_event_id || raw.id || '').trim();
+      const parsedMag =
+        typeof raw.magnitude === 'number'
+          ? raw.magnitude
+          : raw.magnitude != null && raw.magnitude !== ''
+          ? Number(raw.magnitude)
+          : null;
+      const parsedDist =
+        typeof raw.distance_from_cdo_km === 'number'
+          ? raw.distance_from_cdo_km
+          : raw.distance_from_cdo_km != null && raw.distance_from_cdo_km !== ''
+          ? Number(raw.distance_from_cdo_km)
+          : null;
+
+      const normalized: EarthquakeAlertRecord = {
+        id: String(raw.notification_id ?? raw.id ?? eventId ?? Date.now()),
+        external_event_id: eventId || String(Date.now()),
+        title:
+          raw.title ||
+          `Earthquake Alert: ${
+            parsedMag != null && Number.isFinite(parsedMag) ? `M${parsedMag.toFixed(1)}` : 'Alert'
+          } — ${raw.place || 'Unknown Location'}`,
+        message: raw.message || '',
+        magnitude: parsedMag != null && Number.isFinite(parsedMag) ? parsedMag : null,
+        place: String(raw.place || 'Unknown Location'),
+        distance_from_cdo_km:
+          parsedDist != null && Number.isFinite(parsedDist) ? parsedDist : null,
+        reported_intensity: raw.reported_intensity ?? null,
+        classification: String(raw.classification || 'earthquake_alert'),
+        source: String(raw.source || 'PHIVOLCS'),
+        event_occurred_at: raw.event_occurred_at || raw.created_at,
+        evaluated_at: raw.evaluated_at || raw.created_at,
+        alert_detected_at: raw.alert_detected_at ?? null,
+        alert_expires_at: raw.alert_expires_at ?? null,
+        alert_active: typeof raw.alert_active === 'boolean' ? raw.alert_active : undefined,
+        acknowledged: Boolean(raw.acknowledged),
+      };
+
+      if (!isEarthquakeAlertActive(normalized, Date.now(), dismissedEarthquakeIds)) {
+        return;
+      }
+
+      setIsEarthquakeRinging(true);
+      if (eqRingTimer) clearTimeout(eqRingTimer);
+      eqRingTimer = setTimeout(() => setIsEarthquakeRinging(false), 3500);
+
+      if (!seenEarthquakeModalIdsRef.current.has(normalized.external_event_id)) {
+        seenEarthquakeModalIdsRef.current.add(normalized.external_event_id);
+        setSelectedEarthquakeModal(normalized);
+        triggerBrowserEarthquakeNotification(normalized);
+      }
     };
 
     window.addEventListener('safe:new-incident-alert', handleNewAlert);
+    window.addEventListener('safe:new-earthquake-alert', handleNewEarthquakeAlert);
     return () => {
+      if (ringTimer) clearTimeout(ringTimer);
+      if (eqRingTimer) clearTimeout(eqRingTimer);
       window.removeEventListener('safe:new-incident-alert', handleNewAlert);
+      window.removeEventListener('safe:new-earthquake-alert', handleNewEarthquakeAlert);
     };
-  }, []);
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(timer);
-  }, []);
+  }, [dismissedEarthquakeIds]);
 
   const currentDate = now.toLocaleDateString('en-US', {
     weekday: 'long',
@@ -362,7 +644,7 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
             {menuItems.map((item) => {
               const Icon = item.icon;
               const isActive = currentPath === item.path;
-             
+
               return (
                 <Link
                   key={item.path}
@@ -401,7 +683,7 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
               </div>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3 sm:gap-4">
               <div className="hidden lg:flex items-center gap-4 text-sm text-white/90 font-medium">
                 <div className="flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-indigo-300" />
@@ -412,6 +694,137 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                   <span>{currentTime}</span>
                 </div>
               </div>
+
+              {/* Earthquake Alerts Dropdown (History + Active Count) */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    title="Earthquake Alerts"
+                    className="relative text-amber-200 hover:bg-white/10 hover:text-white focus:outline-none cursor-pointer rounded-xl px-2.5"
+                  >
+                    <Activity
+                      className={`w-5 h-5 transition-transform ${
+                        isEarthquakeRinging ? 'animate-bounce text-rose-300 scale-125' : ''
+                      }`}
+                    />
+                    <span className="hidden xl:inline text-xs font-bold ml-1.5">EQ Alerts</span>
+                    {unreadEarthquakeCount > 0 && (
+                      <Badge className="absolute -top-1 -right-1 w-5 h-5 flex items-center justify-center p-0 bg-rose-600 text-white text-xs border-2 border-[#201b50] animate-pulse rounded-full">
+                        {unreadEarthquakeCount}
+                      </Badge>
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  className="w-80 sm:w-96 bg-white border-rose-100 text-slate-800 shadow-xl rounded-2xl"
+                >
+                  <DropdownMenuLabel className="flex justify-between items-center py-3 px-4 border-b border-slate-100">
+                    <span className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
+                      <Activity className="w-4 h-4 text-rose-600" />
+                      Earthquake Alerts
+                    </span>
+                    {unreadEarthquakeCount > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => void dismissAllEarthquakeAlerts()}
+                        className="flex items-center gap-1 text-xs text-rose-600 hover:underline cursor-pointer font-semibold"
+                      >
+                        <CheckCheck className="w-3.5 h-3.5" />
+                        Acknowledge all
+                      </button>
+                    ) : (
+                      <span className="text-xs text-slate-400">No active alerts</span>
+                    )}
+                  </DropdownMenuLabel>
+
+                  <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                    {earthquakeAlerts.length > 0 ? (
+                      earthquakeAlerts.map((eq) => {
+                        const eqId = String(eq.external_event_id || eq.id);
+                        const isActive = isEarthquakeAlertActive(eq, nowMs, dismissedEarthquakeIds);
+                        const isAcknowledgedOrExpired = !isActive;
+                        const magLabel =
+                          eq.magnitude != null ? `M${Number(eq.magnitude).toFixed(1)}` : 'Alert';
+                        const distLabel =
+                          eq.distance_from_cdo_km != null
+                            ? `${Number(eq.distance_from_cdo_km).toFixed(1)} km from USTP CDO`
+                            : 'Regional zone';
+
+                        return (
+                          <div
+                            key={eqId}
+                            onClick={() => {
+                              if (isActive) {
+                                setSelectedEarthquakeModal(eq);
+                              } else {
+                                navigate('/notifications');
+                              }
+                            }}
+                            className={`flex flex-col items-start gap-1 p-3.5 transition-colors cursor-pointer ${
+                              isAcknowledgedOrExpired
+                                ? 'opacity-65 bg-transparent hover:bg-slate-50 text-slate-500'
+                                : 'bg-rose-50/60 hover:bg-rose-50 text-slate-800'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between w-full gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                {isActive && (
+                                  <span className="w-2 h-2 rounded-full bg-rose-600 shrink-0 animate-ping" />
+                                )}
+                                <span className="text-xs font-extrabold text-slate-900 truncate">
+                                  {eq.title || `Earthquake Alert: ${magLabel} — ${eq.place}`}
+                                </span>
+                              </div>
+                              <Badge className="text-[10px] font-bold px-2 py-0.2 bg-rose-100 text-rose-700 border-rose-200 shrink-0">
+                                {magLabel}
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-slate-600 pl-4 line-clamp-1">
+                              {eq.place} • {distLabel}
+                            </p>
+                            <div className="pl-4 mt-1 flex items-center justify-between w-full text-[11px] text-slate-400">
+                              <span>{eq.source || 'PHIVOLCS'}</span>
+                              {isActive ? (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void handleAcknowledgeEarthquake(eq);
+                                  }}
+                                  className="text-rose-600 hover:underline font-semibold cursor-pointer"
+                                >
+                                  Acknowledge
+                                </button>
+                              ) : (
+                                <span className="text-slate-400 font-medium">
+                                  {eq.acknowledged ? 'Acknowledged' : 'Expired'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="p-6 text-center text-xs text-slate-400">
+                        No earthquake alerts recorded.
+                      </div>
+                    )}
+                  </div>
+
+                  <DropdownMenuSeparator className="bg-slate-100" />
+                  <DropdownMenuItem asChild>
+                    <Link
+                      to="/notifications"
+                      className="w-full text-center text-xs font-bold text-rose-600 hover:underline justify-center py-2.5 focus:bg-rose-50 focus:text-rose-700 cursor-pointer"
+                    >
+                      Open Notifications Center
+                    </Link>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
 
               {/* Notifications Dropdown */}
               <DropdownMenu>
@@ -444,7 +857,7 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                       <span className="text-xs text-slate-400">All read</span>
                     )}
                   </DropdownMenuLabel>
-                 
+
                   <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
                     {notifications.length > 0 ? (
                       notifications.map((item: any) => {
@@ -465,29 +878,20 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                                   {!item.isRead && (
                                     <span className="w-2 h-2 rounded-full bg-rose-600 shrink-0" />
                                   )}
-                                  <span className={`text-xs truncate ${item.isRead ? 'text-slate-700 font-semibold' : 'text-slate-900 font-extrabold'}`}>
+                                  <span className={`text-xs font-bold truncate ${isCritical && !item.isRead ? 'text-rose-700' : 'text-slate-900'}`}>
                                     {item.title}
                                   </span>
                                 </div>
-                                <span className="text-[10px] text-slate-400 whitespace-nowrap ml-2">{item.time}</span>
+                                <span className="text-[11px] text-slate-400 shrink-0 ml-2">{item.time}</span>
                               </div>
-                              <p className="text-xs text-slate-600 line-clamp-2 pl-4">
-                                {item.message}
-                              </p>
-                              <div className="pl-4 mt-1 flex items-center gap-2">
-                                <Badge className={`text-[10px] font-bold px-2 py-0.2 capitalize ${
-                                  isCritical ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-amber-100 text-amber-700 border-amber-200'
-                                }`}>
-                                  {item.severity}
-                                </Badge>
-                              </div>
+                              <p className="text-xs text-slate-600 pl-4 line-clamp-2">{item.message}</p>
                             </Link>
                           </DropdownMenuItem>
                         );
                       })
                     ) : (
                       <div className="p-6 text-center text-xs text-slate-400">
-                        No incident notifications found.
+                        No notifications available
                       </div>
                     )}
                   </div>
@@ -504,308 +908,339 @@ export function DashboardLayout({ displayName: initialDisplayName, onLogout }: D
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              {/* Admin Profile Button triggering the Profile Card Modal */}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setModalView('view');
-                  setIsProfileModalOpen(true);
-                }}
-                className="gap-2 cursor-pointer hover:bg-white/10 text-white rounded-xl"
-              >
-                <Avatar className="w-8 h-8 border border-white/40">
-                  <AvatarFallback className="bg-indigo-700 text-white text-sm font-bold">
-                    {initials}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="hidden md:block text-left">
-                  <p className="text-sm font-semibold text-white leading-tight">{displayName}</p>
-                  <p className="text-[11px] text-indigo-200">Administrator</p>
-                </div>
-              </Button>
+              {/* Profile Avatar Dropdown */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="flex items-center gap-2.5 p-1 rounded-full hover:bg-white/10 transition-colors cursor-pointer focus:outline-none">
+                    <Avatar className="w-9 h-9 border-2 border-indigo-300 shadow-sm">
+                      <AvatarFallback className="bg-indigo-600 text-white font-bold text-xs">
+                        {initials}
+                      </AvatarFallback>
+                    </Avatar>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 bg-white border-indigo-100 text-slate-800 shadow-xl rounded-2xl p-2">
+                  <DropdownMenuLabel className="font-bold text-slate-900 pb-2">
+                    {displayName}
+                    <p className="text-xs text-slate-400 font-normal truncate">{contactEmail || 'Administrator'}</p>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator className="bg-slate-100" />
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setModalView('view');
+                      setFeedbackMessage('');
+                      setIsProfileModalOpen(true);
+                    }}
+                    className="flex items-center gap-2 text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 rounded-xl cursor-pointer py-2.5 px-3"
+                  >
+                    <User className="w-4 h-4 text-indigo-600" />
+                    Profile & Account
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={onLogout}
+                    className="flex items-center gap-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 hover:text-rose-700 rounded-xl cursor-pointer py-2.5 px-3"
+                  >
+                    <LogOut className="w-4 h-4 text-rose-600" />
+                    Sign Out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
         </header>
 
-        <main className="min-h-[calc(100vh-4rem)] p-8 shadow-inner shadow-indigo-950/5">
+        {/* Page Content */}
+        <main className="p-6">
           <Outlet />
         </main>
       </div>
 
-      {/* Profile Modal Card */}
-      {isProfileModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <Card className="w-full max-w-md bg-white border border-slate-200 shadow-2xl rounded-2xl p-6 relative overflow-hidden space-y-5">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div className="flex items-center gap-2">
-                {modalView !== 'view' && (
-                  <button
-                    onClick={() => {
-                      setModalView('view');
-                      setFeedbackMessage('');
-                    }}
-                    className="p-1 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors mr-1 cursor-pointer"
-                    title="Back to Profile Details"
-                  >
-                    <ArrowLeft className="w-4 h-4" />
-                  </button>
-                )}
+      {/* Active Earthquake Alert Modal (closes automatically when expired or acknowledged) */}
+      {isEarthquakeAlertModalOpen && displayedEarthquakeModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4"
+          onClick={() => dismissEarthquakeAlert(String(displayedEarthquakeModal.external_event_id || displayedEarthquakeModal.id))}
+        >
+          <Card
+            className="w-full max-w-lg bg-white border-2 border-rose-500 shadow-2xl rounded-3xl overflow-hidden text-slate-800"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-gradient-to-r from-rose-700 via-rose-600 to-amber-600 px-6 py-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Activity className="w-5 h-5 animate-pulse" />
                 <div>
-                  <h2 className="text-lg font-extrabold text-slate-900">
-                    {modalView === 'view' && 'Administrator Profile'}
-                    {modalView === 'edit-profile' && 'Update Profile Details'}
-                    {modalView === 'edit-password' && 'Update Password'}
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider bg-white/20 px-2 py-0.5 rounded-full">
+                    {displayedEarthquakeModal.source || 'PHIVOLCS'} • Active Alert
+                  </span>
+                  <h2 className="text-lg font-black tracking-tight mt-0.5">
+                    {displayedEarthquakeModal.title || 'Earthquake Alert'}
                   </h2>
-                  <p className="text-xs text-slate-500 font-medium">
-                    {modalView === 'view' && 'View your profile details and account actions'}
-                    {modalView === 'edit-profile' && 'Modify your name and contact information'}
-                    {modalView === 'edit-password' && 'Secure your account with a new password'}
-                  </p>
                 </div>
               </div>
               <button
-                onClick={() => setIsProfileModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
+                type="button"
+                onClick={() => dismissEarthquakeAlert(String(displayedEarthquakeModal.external_event_id || displayedEarthquakeModal.id))}
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {feedbackMessage && (
-              <div className={`p-3 text-xs font-bold rounded-xl text-center ${
-                feedbackMessage.includes('match') || feedbackMessage.includes('Failed') || feedbackMessage.includes('incorrect')
-                  ? 'bg-rose-50 border border-rose-200 text-rose-700'
-                  : 'bg-emerald-50 border border-emerald-200 text-emerald-700'
-              }`}>
-                {feedbackMessage}
+            <div className="p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-rose-50 border border-rose-200 rounded-2xl p-4">
+                <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                  <MapPin className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{displayedEarthquakeModal.place}</span>
+                </div>
+                <Badge className="bg-rose-600 text-white font-black text-xs px-2.5 py-0.5">
+                  {displayedEarthquakeModal.magnitude != null
+                    ? `M${Number(displayedEarthquakeModal.magnitude).toFixed(1)}`
+                    : 'Alert'}
+                </Badge>
               </div>
-            )}
 
-            {/* VIEW MODE: Display Profile Details & Action Buttons */}
-            {modalView === 'view' && (
-              <div className="space-y-5">
-                {/* Avatar and Info Card */}
-                <div className="flex items-center gap-4 bg-slate-50 border border-slate-100 p-4 rounded-xl">
-                  <Avatar className="w-14 h-14 border border-slate-200 shadow-sm">
-                    <AvatarFallback className="bg-indigo-600 text-white text-lg font-bold">
-                      {initials}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <p className="text-base font-extrabold text-slate-900 truncate">{displayName}</p>
-                    <p className="text-xs font-semibold text-blue-600">@{username || 'admin'}</p>
-                  </div>
+              {displayedEarthquakeModal.message && (
+                <p className="text-xs text-slate-700 leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200/70">
+                  {displayedEarthquakeModal.message}
+                </p>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 text-xs text-slate-600">
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Distance from USTP CDO</span>
+                  <span className="font-bold text-slate-900">
+                    {displayedEarthquakeModal.distance_from_cdo_km != null
+                      ? `${Number(displayedEarthquakeModal.distance_from_cdo_km).toFixed(1)} km`
+                      : 'N/A'}
+                  </span>
                 </div>
-
-                {/* Contact Details Section */}
-                <div className="space-y-3 bg-slate-50/60 border border-slate-100 p-4 rounded-xl">
-                  <p className="text-xs font-bold text-slate-700 uppercase tracking-wider">Contact Details</p>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3 text-xs text-slate-700 font-medium">
-                      <Mail className="w-4 h-4 text-slate-400 shrink-0" />
-                      <span className="truncate">{contactEmail || 'Not specified'}</span>
-                    </div>
-                    <div className="flex items-center gap-3 text-xs text-slate-700 font-medium">
-                      <Phone className="w-4 h-4 text-slate-400 shrink-0" />
-                      <span>{contactNumber || 'Not specified'}</span>
-                    </div>
-                  </div>
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Reported Intensity</span>
+                  <span className="font-bold text-slate-900">
+                    {displayedEarthquakeModal.reported_intensity || 'None reported'}
+                  </span>
                 </div>
+              </div>
 
-                {/* Action Buttons */}
-                <div className="space-y-2.5 pt-2">
-                  <button
-                    onClick={() => setModalView('edit-profile')}
-                    className="w-full flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-blue-500 hover:bg-blue-50/20 text-slate-800 font-bold text-xs transition-all cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center">
-                        <Edit3 className="w-4 h-4" />
-                      </div>
-                      <span>Update Profile Details</span>
-                    </div>
-                    <span className="text-[11px] text-slate-400 font-medium">Edit</span>
-                  </button>
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => dismissEarthquakeAlert(String(displayedEarthquakeModal.external_event_id || displayedEarthquakeModal.id))}
+                  className="rounded-xl text-xs font-bold cursor-pointer"
+                >
+                  Dismiss
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => void handleAcknowledgeEarthquake(displayedEarthquakeModal)}
+                  className="bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-extrabold cursor-pointer"
+                >
+                  Acknowledge Alert
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
 
+      {/* Profile & Account Modal */}
+      {isProfileModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
+          <Card className="w-full max-w-md bg-white border-indigo-100 shadow-2xl rounded-3xl overflow-hidden text-slate-800">
+            <div className="bg-[#201b50] px-6 py-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {modalView !== 'view' && (
                   <button
-                    onClick={() => setModalView('edit-password')}
-                    className="w-full flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-indigo-500 hover:bg-indigo-50/20 text-slate-800 font-bold text-xs transition-all cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center">
-                        <Lock className="w-4 h-4" />
-                      </div>
-                      <span>Update Password</span>
-                    </div>
-                    <span className="text-[11px] text-slate-400 font-medium">Secure</span>
-                  </button>
-
-                  <button
+                    type="button"
                     onClick={() => {
-                      setIsProfileModalOpen(false);
-                      onLogout();
+                      setFeedbackMessage('');
+                      setModalView('view');
                     }}
-                    className="w-full flex items-center justify-between p-3 rounded-xl border border-rose-200 hover:bg-rose-50 text-rose-600 font-bold text-xs transition-all cursor-pointer group"
+                    className="p-1 rounded-lg hover:bg-white/10 text-white/80 hover:text-white transition-colors cursor-pointer"
                   >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center">
-                        <LogOut className="w-4 h-4" />
-                      </div>
-                      <span>Sign Out</span>
-                    </div>
-                    <span className="text-[11px] text-rose-400 font-medium">Exit</span>
+                    <ArrowLeft className="w-4 h-4" />
                   </button>
-                </div>
+                )}
+                <h2 className="text-base font-extrabold tracking-tight">
+                  {modalView === 'view'
+                    ? 'Profile & Account'
+                    : modalView === 'edit-profile'
+                    ? 'Edit Profile'
+                    : 'Change Password'}
+                </h2>
               </div>
-            )}
+              <button
+                type="button"
+                onClick={() => {
+                  setFeedbackMessage('');
+                  setIsProfileModalOpen(false);
+                }}
+                className="p-1.5 rounded-xl hover:bg-white/10 text-white/80 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-            {/* EDIT PROFILE VIEW */}
-            {modalView === 'edit-profile' && (
-              <form onSubmit={handleSaveProfile} className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Full Name</label>
-                  <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input
+            <div className="p-6">
+              {feedbackMessage && (
+                <div className="mb-4 p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-xs font-semibold text-indigo-800">
+                  {feedbackMessage}
+                </div>
+              )}
+
+              {modalView === 'view' && (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3.5 bg-slate-50 p-4 rounded-2xl border border-slate-200/70">
+                    <Avatar className="w-12 h-12 border-2 border-indigo-200">
+                      <AvatarFallback className="bg-indigo-600 text-white font-bold text-sm">
+                        {initials}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-black text-slate-900 truncate">{displayName}</h3>
+                      <p className="text-xs text-slate-500 truncate">@{username || 'admin'}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5 text-xs text-slate-700 bg-slate-50 p-4 rounded-2xl border border-slate-200/70">
+                    <div className="flex items-center gap-2.5">
+                      <Mail className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <span className="truncate">{contactEmail || 'No email set'}</span>
+                    </div>
+                    <div className="flex items-center gap-2.5">
+                      <Phone className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <span className="truncate">{contactNumber || 'No phone number set'}</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5 pt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setFeedbackMessage('');
+                        setModalView('edit-profile');
+                      }}
+                      className="rounded-xl text-xs font-bold gap-1.5 cursor-pointer"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      Edit Profile
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setFeedbackMessage('');
+                        setModalView('edit-password');
+                      }}
+                      className="rounded-xl text-xs font-bold gap-1.5 cursor-pointer"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      Password
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {modalView === 'edit-profile' && (
+                <form onSubmit={handleSaveProfile} className="space-y-3.5">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">Display Name</label>
+                    <Input
                       type="text"
                       value={displayName}
                       onChange={(e) => setDisplayName(e.target.value)}
-                      required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 transition-all"
+                      className="rounded-xl text-xs"
                     />
                   </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Username</label>
-                  <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">Username</label>
+                    <Input
                       type="text"
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      autoCapitalize="none"
-                      required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 transition-all"
+                      className="rounded-xl text-xs"
                     />
                   </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Contact Email</label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">Email</label>
+                    <Input
                       type="email"
                       value={contactEmail}
                       onChange={(e) => setContactEmail(e.target.value)}
-                      required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 transition-all"
+                      className="rounded-xl text-xs"
                     />
                   </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Contact Number</label>
-                  <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">Phone Number</label>
+                    <Input
                       type="text"
                       value={contactNumber}
                       onChange={(e) => setContactNumber(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-blue-600 transition-all"
+                      className="rounded-xl text-xs"
                     />
                   </div>
-                </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button
+                      type="submit"
+                      disabled={isSaving}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold gap-1.5 cursor-pointer"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      {isSaving ? 'Saving...' : 'Save Changes'}
+                    </Button>
+                  </div>
+                </form>
+              )}
 
-                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => setModalView('view')}
-                    disabled={isSaving}
-                    className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold text-xs transition-all cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSaving}
-                    className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs transition-all shadow-md cursor-pointer disabled:opacity-50"
-                  >
-                    <Save className="w-4 h-4" />
-                    {isSaving ? 'Saving...' : 'Save Details'}
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {/* EDIT PASSWORD VIEW */}
-            {modalView === 'edit-password' && (
-              <form onSubmit={handleSavePassword} className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Current Password</label>
-                  <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input
+              {modalView === 'edit-password' && (
+                <form onSubmit={handleSavePassword} className="space-y-3.5">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">Current Password</label>
+                    <Input
                       type="password"
                       value={currentPassword}
                       onChange={(e) => setCurrentPassword(e.target.value)}
+                      className="rounded-xl text-xs"
                       required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 transition-all"
                     />
                   </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">New Password</label>
-                  <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">New Password</label>
+                    <Input
                       type="password"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
+                      className="rounded-xl text-xs"
                       required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 transition-all"
                     />
                   </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Confirm New Password</label>
-                  <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">Confirm New Password</label>
+                    <Input
                       type="password"
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="rounded-xl text-xs"
                       required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 transition-all"
                     />
                   </div>
-                </div>
-
-                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => setModalView('view')}
-                    disabled={isSaving}
-                    className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold text-xs transition-all cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSaving}
-                    className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs transition-all shadow-md cursor-pointer disabled:opacity-50"
-                  >
-                    <Save className="w-4 h-4" />
-                    {isSaving ? 'Updating...' : 'Update Password'}
-                  </button>
-                </div>
-              </form>
-            )}
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button
+                      type="submit"
+                      disabled={isSaving}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold gap-1.5 cursor-pointer"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      {isSaving ? 'Updating...' : 'Update Password'}
+                    </Button>
+                  </div>
+                </form>
+              )}
+            </div>
           </Card>
         </div>
       )}

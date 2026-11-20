@@ -10,6 +10,7 @@ from .views import (
     UpdateProfileView,
     ChangePasswordView,
     CreateClinicStaffView,
+    AcknowledgeEarthquakeAlertView,
     CreateUserView,
     IncidentListView,
     PasswordResetRequestView,
@@ -22,6 +23,11 @@ from .views import (
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
+    path(
+    "earthquakes/<str:event_id>/acknowledge/",
+    AcknowledgeEarthquakeAlertView.as_view(),
+    name="earthquake-alert-acknowledge",
+),
     path('login/', LoginView.as_view(), name='login'),
     path('login/mobile/', MobileLoginView.as_view(), name='mobile-login'),
     path('token/refresh/', TokenRefreshView.as_view(), name='refresh'),

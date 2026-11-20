@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   TextInput,
   Alert,
   Linking,
+  Platform,
 } from 'react-native';
 import {
   ShieldAlert,
@@ -36,6 +37,10 @@ import {
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAudioPlayer } from 'expo-audio';
+import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { useAuth } from '../../auth/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import {
@@ -46,10 +51,42 @@ import {
   EarthquakeClassification,
 } from '../../lib/api';
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
+
 const EARTHQUAKE_POLL_INTERVAL_MS = (() => {
   const configured = Number(process.env.EXPO_PUBLIC_EARTHQUAKE_POLL_MS);
   return Number.isFinite(configured) && configured >= 1000 ? configured : 10_000;
 })();
+
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL?.replace(/\/+$/, '') || '/api/auth';
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
+const SUPABASE_ANON_KEY =
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ??
+  process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+let mobileRealtimeClient: SupabaseClient | null = null;
+
+function getMobileRealtimeClient(): SupabaseClient | null {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+  if (!mobileRealtimeClient) {
+    mobileRealtimeClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+  }
+  return mobileRealtimeClient;
+}
 
 interface IncidentType {
   id: string;
@@ -81,6 +118,37 @@ function getEventTimestampMs(eq: EarthquakeEvent): number {
   return 0;
 }
 
+function getEarthquakeEventId(eq: EarthquakeEvent | null | undefined): string {
+  if (!eq) return '';
+  return String((eq as any).external_event_id || eq.id || '').trim();
+}
+
+function getAlertExpiresAtMs(eq: EarthquakeEvent | null | undefined): number | null {
+  const rawExpires = (eq as any)?.alert_expires_at;
+  if (!rawExpires) return null;
+  const parsed = Date.parse(String(rawExpires));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isEarthquakeAlertActive(
+  eq: EarthquakeEvent | null | undefined,
+  dismissedIds: string[],
+  nowMs: number
+): boolean {
+  if (!eq) return false;
+  if (eq.classification !== 'earthquake_alert') return false;
+  if (Boolean((eq as any).acknowledged)) return false;
+  if ((eq as any).alert_active === false) return false;
+
+  const eventId = getEarthquakeEventId(eq);
+  if (eventId && dismissedIds.includes(eventId)) return false;
+
+  const expiresAtMs = getAlertExpiresAtMs(eq);
+  if (expiresAtMs === null) return false;
+
+  return nowMs < expiresAtMs;
+}
+
 function formatClassificationLabel(classification?: EarthquakeClassification): string {
   switch (classification) {
     case 'earthquake_alert':
@@ -92,16 +160,77 @@ function formatClassificationLabel(classification?: EarthquakeClassification): s
   }
 }
 
+function normalizeRealtimeEarthquakeRow(row: any): EarthquakeEvent | null {
+  if (!row || typeof row !== 'object') return null;
+  const eventId = String(
+    row.external_event_id || row.earthquake_event_id || row.id || ''
+  ).trim();
+  if (!eventId) return null;
+
+  const rawClass = String(row.classification || '').trim().toLowerCase();
+  const classification: EarthquakeClassification =
+    rawClass === 'earthquake_alert' || rawClass === 'advisory' || rawClass === 'monitoring'
+      ? rawClass
+      : 'earthquake_alert';
+
+  const parsedMag =
+    typeof row.magnitude === 'number'
+      ? row.magnitude
+      : row.magnitude != null && row.magnitude !== ''
+      ? Number(row.magnitude)
+      : null;
+
+  const parsedDepth =
+    typeof row.depth_km === 'number'
+      ? row.depth_km
+      : row.depth_km != null && row.depth_km !== ''
+      ? Number(row.depth_km)
+      : null;
+
+  const parsedDist =
+    typeof row.distance_from_cdo_km === 'number'
+      ? row.distance_from_cdo_km
+      : row.distance_from_cdo_km != null && row.distance_from_cdo_km !== ''
+      ? Number(row.distance_from_cdo_km)
+      : 0;
+
+  const occurredAt = row.event_occurred_at || row.created_at || new Date().toISOString();
+
+  return {
+    id: eventId,
+    external_event_id: row.external_event_id || eventId,
+    magnitude: Number.isFinite(parsedMag as number) ? parsedMag : null,
+    place: String(row.place || row.location || 'Regional Seismic Zone'),
+    time: occurredAt,
+    event_occurred_at: occurredAt,
+    url: row.url || 'https://www.phivolcs.dost.gov.ph/',
+    depth_km: Number.isFinite(parsedDepth as number) ? parsedDepth : null,
+    distance_from_cdo_km: Number.isFinite(parsedDist) ? parsedDist : 0,
+    reported_intensity: row.reported_intensity ?? null,
+    classification,
+    source: String(row.source || 'PHIVOLCS'),
+    alert_detected_at: row.alert_detected_at ?? null,
+    alert_expires_at: row.alert_expires_at ?? null,
+    alert_active: typeof row.alert_active === 'boolean' ? row.alert_active : undefined,
+    acknowledged: Boolean(row.acknowledged),
+  } as EarthquakeEvent;
+}
+
 export default function HomeScreen() {
   const { session, submitIncidentReport, updateSession } = useAuth();
   const { isDark } = useTheme();
 
   const [now, setNow] = useState(() => new Date());
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [currentSeconds, setCurrentSeconds] = useState('00');
   const [temperature, setTemperature] = useState<number | null>(null);
   const [sensorLoading, setSensorLoading] = useState(true);
 
-  // Earthquake feed state
+  // Expo push token & subscription state
+  const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
+  const [realtimeSubscribed, setRealtimeSubscribed] = useState(false);
+
+  // Earthquake feed state (keeps full history; active alerts are filtered dynamically)
   const [earthquakes, setEarthquakes] = useState<EarthquakeEvent[]>([]);
   const [dismissedQuakeIds, setDismissedQuakeIds] = useState<string[]>([]);
 
@@ -131,15 +260,230 @@ export default function HomeScreen() {
 
   const KIOSK_DEFAULT_LOCATION = 'Building 8 2nd Floor';
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
-  };
+  }, []);
+
+  const stopAlertSiren = useCallback(() => {
+    try {
+      player.pause();
+      player.seekTo(0);
+    } catch (err) {
+      console.warn('Error stopping alert sound:', err);
+    }
+  }, [player]);
+
+  const upsertRealtimeEarthquake = useCallback((rawRow: any) => {
+    const normalized = normalizeRealtimeEarthquakeRow(rawRow);
+    if (!normalized) return;
+
+    const normalizedId = getEarthquakeEventId(normalized);
+    const isActiveAlert = isEarthquakeAlertActive(normalized, [], Date.now());
+    if (normalized.classification === 'earthquake_alert' && isActiveAlert && normalizedId) {
+      setDismissedQuakeIds((prev) => prev.filter((id) => id !== normalizedId));
+    }
+
+    setEarthquakes((previous) => {
+      const filtered = previous.filter(
+        (ev) =>
+          getEarthquakeEventId(ev) !== normalizedId &&
+          ev.id !== normalized.id &&
+          (ev as any).external_event_id !== normalized.id
+      );
+      return [normalized, ...filtered].sort(
+        (a, b) => getEventTimestampMs(b) - getEventTimestampMs(a)
+      );
+    });
+  }, []);
+
+  // Register Expo push token & handle incoming push notifications
+  useEffect(() => {
+    let isMounted = true;
+
+    const registerPushToken = async () => {
+      try {
+        if (Platform.OS === 'android') {
+          await Notifications.setNotificationChannelAsync('emergency-alerts', {
+            name: 'Emergency Alerts',
+            importance: Notifications.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: '#DC2626',
+            sound: 'earthquake-alert.mp3',
+          });
+        }
+
+        if (!Device.isDevice) {
+          return;
+        }
+
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+        if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
+
+        if (finalStatus !== 'granted') {
+          return;
+        }
+
+        const projectId =
+          Constants?.expoConfig?.extra?.eas?.projectId ??
+          (Constants as any)?.easConfig?.projectId;
+
+        if (!projectId || projectId === 'YOUR_EAS_PROJECT_ID') {
+          return;
+        }
+
+        const tokenResponse = await Notifications.getExpoPushTokenAsync({ projectId });
+        const token = tokenResponse?.data;
+        if (!token || !isMounted) return;
+
+        setExpoPushToken(token);
+
+        if (session?.access) {
+          try {
+            await fetch(`${API_BASE_URL}/push-tokens/register/`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${session.access}`,
+              },
+              body: JSON.stringify({
+                expo_push_token: token,
+                platform: Platform.OS,
+              }),
+            });
+          } catch {
+            // Backend push token registration endpoint is optional if handled elsewhere
+          }
+        }
+      } catch (pushErr) {
+        console.warn('Expo push registration skipped or failed:', pushErr);
+      }
+    };
+
+    void registerPushToken();
+
+    const receivedSub = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification?.request?.content?.data as Record<string, any> | undefined;
+      if (
+        data &&
+        (data.classification === 'earthquake_alert' ||
+          data.type === 'earthquake_alert' ||
+          data.external_event_id ||
+          data.earthquake_event_id)
+      ) {
+        upsertRealtimeEarthquake({
+          ...data,
+          id:
+            data.external_event_id ||
+            data.earthquake_event_id ||
+            notification?.request?.identifier,
+          classification: data.classification || 'earthquake_alert',
+        });
+      }
+    });
+
+    const responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response?.notification?.request?.content?.data as Record<string, any> | undefined;
+      if (
+        data &&
+        (data.classification === 'earthquake_alert' ||
+          data.type === 'earthquake_alert' ||
+          data.external_event_id ||
+          data.earthquake_event_id)
+      ) {
+        upsertRealtimeEarthquake({
+          ...data,
+          id:
+            data.external_event_id ||
+            data.earthquake_event_id ||
+            response?.notification?.request?.identifier,
+          classification: data.classification || 'earthquake_alert',
+        });
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      receivedSub.remove();
+      responseSub.remove();
+    };
+  }, [session?.access, upsertRealtimeEarthquake]);
+
+  // Subscribe to real-time earthquake alerts via Supabase Realtime
+  useEffect(() => {
+    const rtClient = getMobileRealtimeClient();
+    if (!rtClient) return;
+
+    if (session?.supabase_access_token) {
+      rtClient.realtime.setAuth(session.supabase_access_token);
+    }
+
+    const channelId = `safe-user-quake-${Math.random().toString(36).slice(2, 9)}`;
+
+    const quakeChannel = rtClient
+      .channel(channelId)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'earthquake_monitoring',
+        },
+        (payload: any) => {
+          if (payload?.eventType === 'DELETE') {
+            const oldId = String(
+              payload?.old?.external_event_id || payload?.old?.id || ''
+            );
+            if (oldId) {
+              setEarthquakes((prev) => prev.filter((ev) => ev.id !== oldId));
+            }
+            return;
+          }
+          upsertRealtimeEarthquake(payload?.new);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notification',
+        },
+        (payload: any) => {
+          const row = payload?.new as Record<string, any> | undefined;
+          if (
+            row &&
+            (String(row.type || '').toLowerCase() === 'earthquake_alert' ||
+              String(row.classification || '').toLowerCase() === 'earthquake_alert' ||
+              row.earthquake_event_id)
+          ) {
+            upsertRealtimeEarthquake({
+              ...row,
+              id: row.earthquake_event_id || row.external_event_id || row.id,
+              classification: row.classification || 'earthquake_alert',
+            });
+          }
+        }
+      )
+      .subscribe((status: string) => {
+        setRealtimeSubscribed(status === 'SUBSCRIBED');
+      });
+
+    return () => {
+      setRealtimeSubscribed(false);
+      void rtClient.removeChannel(quakeChannel);
+    };
+  }, [session?.supabase_access_token, upsertRealtimeEarthquake]);
 
   useEffect(() => {
     const timer = setInterval(() => {
       const d = new Date();
       setNow(d);
+      setNowMs(d.getTime());
       const sec = d.getSeconds();
       setCurrentSeconds(sec < 10 ? `0${sec}` : `${sec}`);
     }, 1000);
@@ -177,6 +521,7 @@ export default function HomeScreen() {
         const res = await fetchEarthquakesWithSession(session);
         const events = res.events || [];
         setEarthquakes(events);
+        setNowMs(Date.now());
 
         if (
           res.session &&
@@ -206,25 +551,24 @@ export default function HomeScreen() {
     };
   }, [session, updateSession]);
 
-  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-  const currentTime = new Date().getTime();
-
-  const activeEarthquakeAlerts = earthquakes.filter((eq) => {
-    const eventMs = getEventTimestampMs(eq);
-    const isWithin24Hours = eventMs > 0 ? currentTime - eventMs <= ONE_DAY_MS : true;
-    const isAlertClassification = eq.classification === 'earthquake_alert';
-    const notDismissed = !dismissedQuakeIds.includes(eq.id);
-
-    return isWithin24Hours && isAlertClassification && notDismissed;
-  });
+  // Keep full history in `earthquakes`; only filter active alerts by server `alert_expires_at`
+  const activeEarthquakeAlerts = earthquakes.filter((eq) =>
+    isEarthquakeAlertActive(eq, dismissedQuakeIds, nowMs)
+  );
 
   const latestAlert = activeEarthquakeAlerts.length > 0 ? activeEarthquakeAlerts[0] : null;
-  const reportUrl = latestAlert?.url || latestAlert?.detail_url || '';
+  const latestAlertId = getEarthquakeEventId(latestAlert);
+  const reportUrl = (latestAlert as any)?.url || (latestAlert as any)?.detail_url || '';
 
-  // Effect to play sound once when latestAlert changes and has not yet been played
+  // Start siren once per active alert ID; stop modal & siren immediately when expired or dismissed
   useEffect(() => {
-    if (latestAlert && !playedAlertIdsRef.current.has(latestAlert.id)) {
-      playedAlertIdsRef.current.add(latestAlert.id);
+    if (!latestAlert || !latestAlertId) {
+      stopAlertSiren();
+      return;
+    }
+
+    if (!playedAlertIdsRef.current.has(latestAlertId)) {
+      playedAlertIdsRef.current.add(latestAlertId);
       try {
         player.seekTo(0);
         player.play();
@@ -232,7 +576,11 @@ export default function HomeScreen() {
         console.warn('Error playing earthquake alert sound:', audioErr);
       }
     }
-  }, [latestAlert, player]);
+
+    return () => {
+      stopAlertSiren();
+    };
+  }, [latestAlert, latestAlertId, player, stopAlertSiren]);
 
   const handleImmediateEmergencyReport = async () => {
     if (submitting) return;
@@ -375,13 +723,13 @@ export default function HomeScreen() {
                     style={styles.quakeDismissActionBtn}
                     onPress={() => {
                       if (latestAlert) {
-                        try {
-                          player.pause();
-                          player.seekTo(0);
-                        } catch (err) {
-                          console.warn('Error stopping alert sound:', err);
+                        stopAlertSiren();
+                        const targetId = getEarthquakeEventId(latestAlert);
+                        if (targetId) {
+                          setDismissedQuakeIds((prev) =>
+                            prev.includes(targetId) ? prev : [...prev, targetId]
+                          );
                         }
-                        setDismissedQuakeIds((prev) => [...prev, latestAlert.id]);
                       }
                     }}
                   >
@@ -855,15 +1203,15 @@ const styles = StyleSheet.create({
   refTitle: { color: '#0f172a', fontSize: 22, fontWeight: '800', textAlign: 'center', marginBottom: 6 },
   refSubtitle: { color: '#475569', fontSize: 13, textAlign: 'center', lineHeight: 18, marginBottom: 16 },
   refDivider: { width: '100%', height: 1, backgroundColor: '#f1f5f9', marginBottom: 16 },
-  refDetailsContainer: { width: '100%', gap: 14, marginBottom: 22 },
+  refDetailsContainer: { width: '100%', gap: 14, marginBottom: 20 },
   refRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  refIconBox: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
+  refIconBox: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
   refTextGroup: { flex: 1 },
-  refLabelText: { color: '#64748b', fontSize: 11, fontWeight: '600', textTransform: 'uppercase' },
-  refValueText: { color: '#0f172a', fontSize: 14, fontWeight: '700' },
-  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fef2f2', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, alignSelf: 'flex-start', marginTop: 2 },
-  statusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#ef4444' },
-  statusBadgeText: { color: '#dc2626', fontSize: 12, fontWeight: '700' },
-  refButton: { width: '100%', backgroundColor: '#0f172a', paddingVertical: 14, borderRadius: 16, alignItems: 'center' },
-  refButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '700' },
+  refLabelText: { fontSize: 11, fontWeight: '600', color: '#64748b' },
+  refValueText: { fontSize: 14, fontWeight: '700', color: '#0f172a' },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
+  statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#ef4444' },
+  statusBadgeText: { fontSize: 13, fontWeight: '800', color: '#dc2626' },
+  refButton: { width: '100%', paddingVertical: 14, borderRadius: 16, backgroundColor: '#0284c7', alignItems: 'center' },
+  refButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '800' },
 });

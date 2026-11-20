@@ -2,18 +2,19 @@ from datetime import datetime, timedelta, timezone
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
-
 import jwt
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.management import call_command, CommandError
 from django.test import TestCase, override_settings
+from rest_framework import status
 from rest_framework.test import APIClient
 
-
 from .earthquake_service import (
+    build_earthquake_notification_rows,
     classify_event,
     create_and_sync_simulation_earthquake,
+    create_earthquake_notifications_in_supabase,
     fetch_earthquakes_from_supabase,
     fetch_phivolcs_raw_events,
     filter_events_for_feed,
@@ -70,13 +71,11 @@ class LoginResponseTests(TestCase):
         user.profile.role = 'admin'
         user.profile.save()
 
-
         response = APIClient().post(
             '/api/auth/login/',
             {'username': 'safe-admin', 'password': 'test-password'},
             format='json',
         )
-
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['user']['id'], user.id)
@@ -85,7 +84,6 @@ class LoginResponseTests(TestCase):
         self.assertIsNone(response.data['sync_warning'])
         sync_user.assert_called_once_with(user, user.profile)
 
-
     @patch(
         'accounts.serializers.sync_user_to_supabase',
         side_effect=SupabaseRequestFailed("Supabase failure"),
@@ -93,13 +91,11 @@ class LoginResponseTests(TestCase):
     def test_login_succeeds_and_reports_when_supabase_sync_fails(self, _sync_user):
         User.objects.create_user(username='local-only', password='test-password')
 
-
         response = APIClient().post(
             '/api/auth/login/',
             {'username': 'local-only', 'password': 'test-password'},
             format='json',
         )
-
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data['supabase_synced'])
@@ -114,7 +110,6 @@ class MobileLoginRestrictionTests(TestCase):
         student_user.profile.role = 'student'
         student_user.profile.save()
 
-
         response = APIClient().post(
             '/api/auth/login/mobile/',
             {'username': 'student1', 'password': 'test-password'},
@@ -123,12 +118,10 @@ class MobileLoginRestrictionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['user']['role'], 'student')
 
-
         # 2. Test standard user success
         standard_user = User.objects.create_user(username='user1', password='test-password')
         standard_user.profile.role = 'user'
         standard_user.profile.save()
-
 
         response = APIClient().post(
             '/api/auth/login/mobile/',
@@ -138,12 +131,10 @@ class MobileLoginRestrictionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['user']['role'], 'user')
 
-
         # 3. Test admin block returns generic error message
         admin_user = User.objects.create_user(username='admin1', password='test-password')
         admin_user.profile.role = 'admin'
         admin_user.profile.save()
-
 
         response = APIClient().post(
             '/api/auth/login/mobile/',
@@ -153,12 +144,10 @@ class MobileLoginRestrictionTests(TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn('No active account found', str(response.data))
 
-
         # 4. Test clinic staff / responder block returns generic error message
         staff_user = User.objects.create_user(username='staff1', password='test-password')
         staff_user.profile.role = 'clinic_staff'
         staff_user.profile.save()
-
 
         response = APIClient().post(
             '/api/auth/login/mobile/',
@@ -187,7 +176,6 @@ class RegistrationTests(TestCase):
             format='json',
         )
 
-
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data['user']['role'], 'user')
         self.assertTrue(response.data['supabase_synced'])
@@ -196,7 +184,6 @@ class RegistrationTests(TestCase):
         self.assertEqual(user.profile.name, 'Safe User')
         self.assertEqual(user.profile.student_id, 'STU-1')
         sync_user.assert_called_once_with(user, user.profile)
-
 
     @patch(
         'accounts.serializers.sync_user_to_supabase',
@@ -225,15 +212,12 @@ class ProfileSyncEndpointTests(TestCase):
         client = APIClient()
         client.force_authenticate(user=user)
 
-
         response = client.post('/api/auth/profile/sync/')
-
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data['supabase_synced'])
         self.assertIsNone(response.data['sync_warning'])
         sync_user.assert_called_once_with(user, user.profile)
-
 
     @patch(
         'accounts.views.sync_user_to_supabase',
@@ -244,18 +228,14 @@ class ProfileSyncEndpointTests(TestCase):
         client = APIClient()
         client.force_authenticate(user=user)
 
-
         response = client.post('/api/auth/profile/sync/')
-
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data['supabase_synced'])
         self.assertEqual(response.data['sync_warning'], "Supabase failure")
 
-
     def test_sync_endpoint_requires_authentication(self):
         response = APIClient().post('/api/auth/profile/sync/')
-
 
         self.assertEqual(response.status_code, 401)
 
@@ -266,7 +246,6 @@ class ProfileUpdateTests(TestCase):
         user = User.objects.create_user(username='update-user', password='test-password')
         client = APIClient()
         client.force_authenticate(user=user)
-
 
         response = client.put(
             '/api/auth/profile/update/',
@@ -281,7 +260,6 @@ class ProfileUpdateTests(TestCase):
             format='json',
         )
 
-
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['user']['name'], 'Updated Name')
         self.assertEqual(response.data['user']['username'], 'new-username-val')
@@ -290,13 +268,11 @@ class ProfileUpdateTests(TestCase):
         self.assertTrue(response.data['supabase_synced'])
         sync_user.assert_called_once()
 
-
     @patch('accounts.views.sync_user_to_supabase', side_effect=SupabaseRequestFailed("Supabase timeout"))
     def test_profile_update_handles_username_change_and_sync_failure(self, sync_user):
         user = User.objects.create_user(username='old-username', password='test-password')
         client = APIClient()
         client.force_authenticate(user=user)
-
 
         response = client.put(
             '/api/auth/profile/update/',
@@ -311,11 +287,9 @@ class ProfileUpdateTests(TestCase):
             format='json',
         )
 
-
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data['supabase_synced'])
         self.assertEqual(response.data['sync_warning'], "Supabase timeout")
-
 
         user.refresh_from_db()
         self.assertEqual(user.username, 'new-username')
@@ -336,9 +310,7 @@ class UserEmailSyncTests(TestCase):
         user.profile.name = 'Email Sync'
         user.profile.save()
 
-
         sync_user_to_supabase(user, user.profile)
-
 
         self.assertTrue(mock_post.called)
         payload = mock_post.call_args.kwargs.get('json', {})
@@ -351,7 +323,6 @@ class PasswordChangeTests(TestCase):
         client = APIClient()
         client.force_authenticate(user=user)
 
-
         response = client.post(
             '/api/auth/profile/change-password/',
             {
@@ -361,18 +332,15 @@ class PasswordChangeTests(TestCase):
             format='json',
         )
 
-
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['message'], 'Password updated successfully.')
         user.refresh_from_db()
         self.assertTrue(user.check_password('new-secure-password'))
 
-
     def test_password_change_requires_correct_current_password(self):
         user = User.objects.create_user(username='pwd-user2', password='old-password')
         client = APIClient()
         client.force_authenticate(user=user)
-
 
         response = client.post(
             '/api/auth/profile/change-password/',
@@ -383,16 +351,13 @@ class PasswordChangeTests(TestCase):
             format='json',
         )
 
-
         self.assertEqual(response.status_code, 400)
         self.assertIn('Current password is incorrect', response.data['error'])
-
 
     def test_password_change_enforces_minimum_length(self):
         user = User.objects.create_user(username='pwd-user3', password='old-password')
         client = APIClient()
         client.force_authenticate(user=user)
-
 
         response = client.post(
             '/api/auth/profile/change-password/',
@@ -403,10 +368,8 @@ class PasswordChangeTests(TestCase):
             format='json',
         )
 
-
         self.assertEqual(response.status_code, 400)
         self.assertIn('at least 6 characters', response.data['error'])
-
 
     def test_password_change_requires_authentication(self):
         response = APIClient().post(
@@ -417,7 +380,6 @@ class PasswordChangeTests(TestCase):
             },
             format='json',
         )
-
 
         self.assertEqual(response.status_code, 401)
 
@@ -432,7 +394,6 @@ class SupabaseAccessTokenTests(TestCase):
         user.profile.role = 'admin'
         user.profile.save()
 
-
         token = create_supabase_access_token(user, user.profile)
         claims = jwt.decode(
             token,
@@ -442,21 +403,17 @@ class SupabaseAccessTokenTests(TestCase):
             issuer='https://project.supabase.co/auth/v1',
         )
 
-
         self.assertEqual(claims['sub'], str(user.pk))
         self.assertEqual(claims['role'], 'authenticated')
         self.assertEqual(claims['app_role'], 'admin')
         self.assertNotIn('password', claims)
 
-
     @override_settings(SUPABASE_URL='', SUPABASE_JWT_SECRET='')
     def test_token_generation_requires_server_supabase_configuration(self):
         user = User.objects.create_user(username='no-supabase-token', password='test-password')
 
-
         with self.assertRaises(SupabaseTokenNotConfigured):
             create_supabase_access_token(user, user.profile)
-
 
     @override_settings(
         SUPABASE_URL='https://project.supabase.co',
@@ -467,13 +424,10 @@ class SupabaseAccessTokenTests(TestCase):
         client = APIClient()
         client.force_authenticate(user=user)
 
-
         response = client.post('/api/auth/token/supabase/')
-
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('supabase_access_token', response.data)
-
 
     @override_settings(
         SUPABASE_URL='https://project.supabase.co',
@@ -483,13 +437,11 @@ class SupabaseAccessTokenTests(TestCase):
     def test_login_includes_supabase_access_token(self, _sync_user):
         User.objects.create_user(username='login-token', password='test-password')
 
-
         response = APIClient().post(
             '/api/auth/login/',
             {'username': 'login-token', 'password': 'test-password'},
             format='json',
         )
-
 
         self.assertEqual(response.status_code, 200)
         self.assertIsInstance(response.data['supabase_access_token'], str)
@@ -501,7 +453,6 @@ class UserTableMappingTests(TestCase):
         self.assertEqual(UserProfile._meta.get_field('user').column, 'user_id')
         self.assertEqual(UserProfile._meta.get_field('role').column, 'user_type')
 
-
     @override_settings(
         SUPABASE_URL='https://project.supabase.co',
         SUPABASE_SERVICE_ROLE_KEY='sb_secret_test-key',
@@ -511,14 +462,11 @@ class UserTableMappingTests(TestCase):
         mock_post.return_value = MagicMock(status_code=201, text='')
         user = User.objects.create_user(username='secret-key-user', password='local-password')
 
-
         sync_user_to_supabase(user, user.profile)
-
 
         headers = mock_post.call_args.kwargs.get('headers', {})
         self.assertEqual(headers.get('apikey'), 'sb_secret_test-key')
         self.assertNotIn('Authorization', headers)
-
 
     @override_settings(
         SUPABASE_URL='https://project.supabase.co',
@@ -529,9 +477,7 @@ class UserTableMappingTests(TestCase):
         mock_post.return_value = MagicMock(status_code=201, text='')
         user = User.objects.create_user(username='legacy-key-user', password='local-password')
 
-
         sync_user_to_supabase(user, user.profile)
-
 
         headers = mock_post.call_args.kwargs.get('headers', {})
         self.assertEqual(headers.get('apikey'), 'legacy-service-role-jwt')
@@ -549,15 +495,12 @@ class SupabaseBackfillCommandTests(TestCase):
         second_user = User.objects.create_user(username='backfill-two', password='test-password')
         output = StringIO()
 
-
         call_command('sync_users_to_supabase', stdout=output)
-
 
         self.assertEqual(sync_user.call_count, 2)
         self.assertIn(f'Synchronized local user {first_user.pk}.', output.getvalue())
         self.assertIn(f'Synchronized local user {second_user.pk}.', output.getvalue())
         self.assertIn('2 synchronized, 0 failed', output.getvalue())
-
 
     @override_settings(SUPABASE_URL='', SUPABASE_SERVICE_ROLE_KEY='')
     def test_command_requires_supabase_credentials(self):
@@ -576,7 +519,6 @@ class PasswordResetOtpTests(TestCase):
         self.admin_user.profile.role = 'admin'
         self.admin_user.profile.save()
 
-
     def test_password_reset_request_generates_and_sends_otp(self):
         response = APIClient().post(
             '/api/auth/password-reset/',
@@ -586,7 +528,6 @@ class PasswordResetOtpTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('OTP code sent successfully', response.data['detail'])
         self.assertIsNotNone(cache.get('otp_admin@campus.edu'))
-
 
     def test_password_reset_request_restricts_non_admin_in_admin_flow(self):
         User.objects.create_user(
@@ -603,14 +544,11 @@ class PasswordResetOtpTests(TestCase):
         self.assertIn('If an associated admin account exists', response.data['detail'])
         self.assertIsNone(cache.get('otp_student@campus.edu'))
 
-
     def test_verify_otp_success_and_failure(self):
         cache.set('otp_admin@campus.edu', '654321', timeout=600)
         cache.set('otp_attempts_admin@campus.edu', 0, timeout=600)
 
-
         client = APIClient()
-
 
         res_fail = client.post(
             '/api/auth/verify-otp/',
@@ -620,7 +558,6 @@ class PasswordResetOtpTests(TestCase):
         self.assertEqual(res_fail.status_code, 400)
         self.assertIn('Invalid or expired OTP code', res_fail.data['detail'])
 
-
         res_success = client.post(
             '/api/auth/verify-otp/',
             {'target': 'admin@campus.edu', 'otp': '654321'},
@@ -629,11 +566,9 @@ class PasswordResetOtpTests(TestCase):
         self.assertEqual(res_success.status_code, 200)
         self.assertIn('OTP verified successfully', res_success.data['detail'])
 
-
     def test_verify_otp_locks_out_after_max_attempts(self):
         cache.set('otp_admin@campus.edu', '654321', timeout=600)
         cache.set('otp_attempts_admin@campus.edu', 5, timeout=600)
-
 
         response = APIClient().post(
             '/api/auth/verify-otp/',
@@ -643,10 +578,8 @@ class PasswordResetOtpTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('Maximum verification attempts exceeded', response.data['detail'])
 
-
     def test_confirm_password_reset_updates_password_and_clears_cache(self):
         cache.set('otp_admin@campus.edu', '654321', timeout=600)
-
 
         response = APIClient().post(
             '/api/auth/confirm-password-reset/',
@@ -658,19 +591,15 @@ class PasswordResetOtpTests(TestCase):
             format='json',
         )
 
-
         self.assertEqual(response.status_code, 200)
         self.assertIn('Password updated successfully', response.data['detail'])
-
 
         self.admin_user.refresh_from_db()
         self.assertTrue(self.admin_user.check_password('brand-new-secure-password'))
         self.assertIsNone(cache.get('otp_admin@campus.edu'))
 
-
     def test_confirm_password_reset_rejects_short_passwords(self):
         cache.set('otp_admin@campus.edu', '654321', timeout=600)
-
 
         response = APIClient().post(
             '/api/auth/confirm-password-reset/',
@@ -681,7 +610,6 @@ class PasswordResetOtpTests(TestCase):
             },
             format='json',
         )
-
 
         self.assertEqual(response.status_code, 400)
         self.assertIn('Password must be at least 6 characters', response.data['detail'])
@@ -719,8 +647,8 @@ class EarthquakeMonitoringSyncTests(TestCase):
 
         sync_earthquakes_to_supabase([ev1, ev1_updated])
 
-        mock_post.assert_called_once()
-        args, kwargs = mock_post.call_args
+        self.assertEqual(mock_post.call_count, 2)
+        args, kwargs = mock_post.call_args_list[0]
         self.assertEqual(
             args[0],
             'https://project.supabase.co/rest/v1/earthquake_monitoring?on_conflict=external_event_id',
@@ -1007,73 +935,90 @@ class EarthquakeMonitoringSyncTests(TestCase):
         self.assertCountEqual([e['id'] for e in resp_all.json()['events']], ['phivolcs:eq-m18', 'phivolcs:eq-m46'])
 
 
-class EarthquakeSimulationEndpointTests(TestCase):
+class EarthquakeNotificationDeliveryTests(TestCase):
     def setUp(self):
         cache.clear()
-        self.student_user = User.objects.create_user(username='sim-student', password='test-password')
-        self.student_user.profile.role = 'student'
-        self.student_user.profile.save()
-
         self.staff_user = User.objects.create_user(
-            username='sim-clinic-staff',
+            username='notif-clinic-staff',
             password='test-password',
             is_staff=True,
         )
         self.staff_user.profile.role = 'clinic_staff'
         self.staff_user.profile.save()
 
-        self.admin_user = User.objects.create_user(
-            username='sim-admin',
-            password='test-password',
-            is_staff=True,
-            is_superuser=True,
-        )
-        self.admin_user.profile.role = 'admin'
-        self.admin_user.profile.save()
-
-    def test_unauthenticated_request_is_rejected_with_401(self):
-        response = APIClient().post(
-            '/api/auth/earthquakes/simulate/',
-            {'magnitude': 6.0, 'classification': 'earthquake_alert'},
-            format='json',
-        )
-        self.assertEqual(response.status_code, 401)
-
-    def test_non_staff_student_request_is_rejected_with_403(self):
-        client = APIClient()
-        client.force_authenticate(user=self.student_user)
-
-        response = client.post(
-            '/api/auth/earthquakes/simulate/',
-            {'magnitude': 6.0, 'classification': 'earthquake_alert'},
-            format='json',
-        )
-        self.assertEqual(response.status_code, 403)
-
-    @patch('accounts.views.create_and_sync_simulation_earthquake')
-    def test_clinic_staff_can_trigger_simulation_with_simulation_test_source(self, mock_create_sim):
-        sim_event = _make_normalized_event(
-            ext_id='sim:eq-test-001',
-            magnitude=6.2,
-            place='Simulated Seismic Zone, Cagayan de Oro',
-            distance_from_cdo_km=20.0,
+    def test_builds_separate_admin_and_clinic_staff_notifications_only_for_earthquake_alert(self):
+        alert_ev = _make_normalized_event(
+            ext_id='phivolcs:eq-alert-1',
+            magnitude=5.2,
+            place='25 km SE of Cagayan de Oro City',
+            distance_from_cdo_km=25.0,
             classification='earthquake_alert',
-            source='Simulation Test',
-            reported_intensity='VI',
+            source='PHIVOLCS',
         )
-        mock_create_sim.return_value = sim_event
+        advisory_ev = _make_normalized_event(
+            ext_id='phivolcs:eq-adv-1',
+            magnitude=3.4,
+            place='25 km SE of Cagayan de Oro City',
+            distance_from_cdo_km=25.0,
+            classification='advisory',
+            source='PHIVOLCS',
+        )
 
+        rows = build_earthquake_notification_rows([alert_ev, advisory_ev])
+        self.assertEqual(len(rows), 2)
+
+        by_audience = {r['audience']: r for r in rows}
+        self.assertEqual(set(by_audience.keys()), {'admin', 'clinic_staff'})
+        self.assertEqual(by_audience['admin']['dedup_key'], 'eq_alert:phivolcs:eq-alert-1:admin')
+        self.assertEqual(
+            by_audience['clinic_staff']['dedup_key'],
+            'eq_alert:phivolcs:eq-alert-1:clinic_staff',
+        )
+        self.assertEqual(by_audience['admin']['earthquake_event_id'], 'phivolcs:eq-alert-1')
+
+    @override_settings(
+        SUPABASE_URL='https://project.supabase.co',
+        SUPABASE_SERVICE_ROLE_KEY='test-service-role-key',
+    )
+    @patch('accounts.earthquake_service.requests.post')
+    def test_duplicate_refresh_uses_ignore_duplicates_on_dedup_key(self, mock_post):
+        mock_post.return_value = MagicMock(ok=True)
+        alert_ev = _make_normalized_event(
+            ext_id='phivolcs:eq-dup-alert',
+            magnitude=4.9,
+            classification='earthquake_alert',
+        )
+
+        first_count = create_earthquake_notifications_in_supabase([alert_ev])
+        second_count = create_earthquake_notifications_in_supabase([alert_ev, alert_ev])
+
+        self.assertEqual(first_count, 2)
+        self.assertEqual(second_count, 2)
+        self.assertEqual(mock_post.call_count, 2)
+
+        for call in mock_post.call_args_list:
+            self.assertIn('on_conflict=dedup_key', call.args[0])
+            self.assertEqual(call.kwargs['headers']['Prefer'], 'resolution=ignore-duplicates,return=minimal')
+            self.assertEqual(len(call.kwargs['json']), 2)
+
+    @override_settings(
+        SUPABASE_URL='https://project.supabase.co',
+        SUPABASE_SERVICE_ROLE_KEY='test-service-role-key',
+    )
+    @patch('accounts.earthquake_service.requests.post')
+    def test_simulate_earthquake_endpoint_creates_notifications_for_both_audiences(self, mock_post):
+        mock_post.return_value = MagicMock(ok=True)
         client = APIClient()
         client.force_authenticate(user=self.staff_user)
 
         response = client.post(
             '/api/auth/earthquakes/simulate/',
             {
-                'magnitude': 6.2,
-                'place': 'Simulated Seismic Zone, Cagayan de Oro',
+                'magnitude': 6.1,
+                'place': 'Simulated Drill Zone, CDO',
                 'classification': 'earthquake_alert',
-                'depth_km': 15.0,
-                'distance_from_cdo_km': 20.0,
+                'depth_km': 14.0,
+                'distance_from_cdo_km': 22.0,
                 'reported_intensity': 'VI',
             },
             format='json',
@@ -1081,46 +1026,18 @@ class EarthquakeSimulationEndpointTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data['event']['source'], 'Simulation Test')
-        self.assertEqual(response.data['event']['external_event_id'], 'sim:eq-test-001')
-        mock_create_sim.assert_called_once()
+        self.assertEqual(mock_post.call_count, 2)
 
-    @override_settings(
-        SUPABASE_URL='https://project.supabase.co',
-        SUPABASE_SERVICE_ROLE_KEY='test-service-role-key',
-    )
-    @patch('accounts.earthquake_service.requests.post')
-    def test_simulation_persists_with_simulation_test_source_and_is_excluded_from_hardware_alarm_sync(
-        self,
-        mock_post,
-    ):
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_post.return_value = mock_resp
+        notif_payload = mock_post.call_args_list[1].kwargs['json']
+        audiences = {row['audience'] for row in notif_payload}
+        self.assertEqual(audiences, {'admin', 'clinic_staff'})
+        for row in notif_payload:
+            self.assertEqual(row['type'], 'earthquake_alert')
+            self.assertEqual(row['magnitude'], 6.1)
 
-        sim_event = create_and_sync_simulation_earthquake(
-            magnitude=6.4,
-            place='Simulated Fault Drill, Misamis Oriental',
-            classification='earthquake_alert',
-            depth_km=12.0,
-            distance_from_cdo_km=18.0,
-            reported_intensity='VI',
-            created_by=self.admin_user.username,
-        )
-
-        self.assertEqual(sim_event['source'], 'Simulation Test')
-        self.assertTrue(mock_post.called)
-        synced_rows = mock_post.call_args.kwargs['json']
-        self.assertEqual(len(synced_rows), 1)
-        self.assertEqual(synced_rows[0]['source'], 'Simulation Test')
-
-        live_event = _make_normalized_event(
-            ext_id='phivolcs:eq-live-001',
-            magnitude=5.8,
-            classification='earthquake_alert',
-            source='PHIVOLCS',
-        )
-        hardware_events = filter_events_for_hardware_alarm_sync([sim_event, live_event])
-        self.assertEqual([ev['external_event_id'] for ev in hardware_events], ['phivolcs:eq-live-001'])
+        sim_event = response.data['event']
+        hardware_events = filter_events_for_hardware_alarm_sync([sim_event])
+        self.assertEqual(hardware_events, [])
 
 
 class PhivolcsEarthquakeServiceTests(TestCase):
@@ -1137,7 +1054,6 @@ class PhivolcsEarthquakeServiceTests(TestCase):
     def test_maps_wrapped_phivolcs_json_response_and_calculates_distance(self, mock_get):
         now_utc = datetime.now(timezone.utc)
         recent_iso = (now_utc - timedelta(minutes=15)).isoformat()
-
 
         mock_resp = MagicMock()
         mock_resp.raise_for_status.return_value = None
@@ -1158,9 +1074,7 @@ class PhivolcsEarthquakeServiceTests(TestCase):
         }
         mock_get.return_value = mock_resp
 
-
         events = get_evaluated_earthquakes()
-
 
         self.assertEqual(len(events), 1)
         event = events[0]
@@ -1176,7 +1090,6 @@ class PhivolcsEarthquakeServiceTests(TestCase):
             'https://earthquake.phivolcs.dost.gov.ph/2026/1119-01.html',
         )
 
-
     @override_settings(
         PHIVOLCS_EARTHQUAKE_FEED_URL='https://earthquake.phivolcs.dost.gov.ph/table.html',
         EARTHQUAKE_BLIND_ZONE_RADIUS_KM=15.0,
@@ -1187,7 +1100,6 @@ class PhivolcsEarthquakeServiceTests(TestCase):
     def test_parses_html_table_fallback_when_endpoint_returns_html(self, mock_get):
         now_utc = datetime.now(timezone.utc)
         recent_str = (now_utc - timedelta(minutes=20)).strftime('%Y/%m/%d %H:%M:%S')
-
 
         mock_resp = MagicMock()
         mock_resp.raise_for_status.return_value = None
@@ -1207,22 +1119,18 @@ class PhivolcsEarthquakeServiceTests(TestCase):
         """
         mock_get.return_value = mock_resp
 
-
         raw_items = fetch_phivolcs_raw_events()
         self.assertEqual(len(raw_items), 1)
         self.assertEqual(raw_items[0]['location'], 'Near Cagayan de Oro')
         self.assertEqual(raw_items[0]['reported_intensity'], 'II')
 
-
         normalized = get_evaluated_earthquakes(raw_items)
         self.assertEqual(len(normalized), 1)
         self.assertEqual(normalized[0]['classification'], 'advisory')
 
-
     @override_settings(EARTHQUAKE_MAX_AGE_HOURS=24.0)
     def test_rejects_stale_future_missing_timestamp_and_invalid_values(self):
         now_utc = datetime(2026, 11, 19, 12, 0, 0, tzinfo=timezone.utc)
-
 
         stale_event = {
             'id': 'stale-1',
@@ -1252,12 +1160,10 @@ class PhivolcsEarthquakeServiceTests(TestCase):
             'magnitude': 4.0,
         }
 
-
         self.assertIsNone(validate_and_normalize_event(stale_event, now_utc=now_utc))
         self.assertIsNone(validate_and_normalize_event(future_event, now_utc=now_utc))
         self.assertIsNone(validate_and_normalize_event(missing_ts_event, now_utc=now_utc))
         self.assertIsNone(validate_and_normalize_event(bad_coords_event, now_utc=now_utc))
-
 
     @override_settings(
         EARTHQUAKE_BLIND_ZONE_RADIUS_KM=15.0,
@@ -1279,7 +1185,6 @@ class PhivolcsEarthquakeServiceTests(TestCase):
             classify_event(magnitude=5.8, distance_from_cdo_km=250.0, reported_intensity='VI'),
             'monitoring',
         )
-
 
     @override_settings(
         EARTHQUAKE_BLIND_ZONE_RADIUS_KM=15.0,
@@ -1313,7 +1218,6 @@ class PhivolcsEarthquakeServiceTests(TestCase):
         # Beyond 200 km -> monitoring
         self.assertEqual(classify_event(7.2, 250.0, 'VII'), 'monitoring')
 
-
     def test_feed_magnitude_filter_does_not_alter_event_classification(self):
         sample_events = [
             {
@@ -1337,3 +1241,183 @@ class PhivolcsEarthquakeServiceTests(TestCase):
         self.assertEqual(filtered[0]['id'], 'phivolcs:eq-m45-far')
         self.assertEqual(filtered[0]['classification'], 'monitoring')
         self.assertEqual(len(sample_events), 2)
+
+
+class EarthquakeAlertExpirationAndAckTests(TestCase):
+    """Tests for earthquake alert expiration windows, feed history, and acknowledgment."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="clinic_staff_test",
+            password="StrongTestPassword123!",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _mock_supabase_response(self, rows):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = rows
+        mock_response.text = ""
+        return mock_response
+
+    @override_settings(
+        SUPABASE_URL="https://example.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY="test-service-role-key",
+    )
+    def test_simulate_earthquake_sets_expiration_window_and_active_flag(self):
+        now = datetime.now(timezone.utc)
+        payload = {
+            "magnitude": 6.2,
+            "place": "Test Seismic Zone, Philippines",
+            "depth_km": 15,
+            "distance_from_cdo_km": 20,
+            "reported_intensity": "VI",
+            "classification": "earthquake_alert",
+        }
+
+        with patch("requests.post") as mock_post:
+            mock_post.return_value = self._mock_supabase_response(
+                [
+                    {
+                        "external_event_id": "sim-eq-001",
+                        "magnitude": 6.2,
+                        "place": "Test Seismic Zone, Philippines",
+                        "depth_km": 15,
+                        "distance_from_cdo_km": 20,
+                        "reported_intensity": "VI",
+                        "classification": "earthquake_alert",
+                        "source": "Simulation Test",
+                        "alert_detected_at": now.isoformat(),
+                        "alert_expires_at": (now + timedelta(minutes=2)).isoformat(),
+                        "alert_active": True,
+                        "acknowledged": False,
+                    }
+                ]
+            )
+
+            response = self.client.post(
+                "/api/auth/earthquakes/simulate/",
+                payload,
+                format="json",
+            )
+
+        self.assertIn(response.status_code, (status.HTTP_200_OK, status.HTTP_201_CREATED))
+        data = response.json()
+        event = data.get("event", data)
+        self.assertEqual(event.get("external_event_id"), "sim-eq-001")
+        self.assertTrue(event.get("alert_detected_at"))
+        self.assertTrue(event.get("alert_expires_at"))
+        self.assertFalse(bool(event.get("acknowledged")))
+
+    @override_settings(
+        SUPABASE_URL="https://example.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY="test-service-role-key",
+    )
+    def test_feed_preserves_expired_and_acknowledged_events_in_history(self):
+        now = datetime.now(timezone.utc)
+        expired_alert = {
+            "external_event_id": "eq-expired-1",
+            "magnitude": 5.8,
+            "place": "Surigao del Sur, Philippines",
+            "depth_km": 12,
+            "distance_from_cdo_km": 185.0,
+            "classification": "earthquake_alert",
+            "source": "PHIVOLCS",
+            "alert_detected_at": (now - timedelta(minutes=10)).isoformat(),
+            "alert_expires_at": (now - timedelta(minutes=5)).isoformat(),
+            "alert_active": False,
+            "acknowledged": False,
+        }
+        acknowledged_alert = {
+            "external_event_id": "eq-acked-2",
+            "magnitude": 6.0,
+            "place": "Davao Oriental, Philippines",
+            "depth_km": 18,
+            "distance_from_cdo_km": 210.0,
+            "classification": "earthquake_alert",
+            "source": "PHIVOLCS",
+            "alert_detected_at": (now - timedelta(seconds=30)).isoformat(),
+            "alert_expires_at": (now + timedelta(minutes=2)).isoformat(),
+            "alert_active": False,
+            "acknowledged": True,
+        }
+        monitoring_event = {
+            "external_event_id": "eq-mon-3",
+            "magnitude": 3.4,
+            "place": "Misamis Oriental, Philippines",
+            "depth_km": 8,
+            "distance_from_cdo_km": 35.0,
+            "classification": "monitoring",
+            "source": "PHIVOLCS",
+            "alert_detected_at": None,
+            "alert_expires_at": None,
+            "alert_active": False,
+            "acknowledged": False,
+        }
+
+        with patch("requests.get") as mock_get:
+            mock_get.return_value = self._mock_supabase_response(
+                [expired_alert, acknowledged_alert, monitoring_event]
+            )
+
+            response = self.client.get("/api/auth/earthquakes/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        events = response.json().get("events", [])
+        event_ids = [ev.get("external_event_id") for ev in events]
+
+        self.assertEqual(
+            event_ids,
+            ["eq-expired-1", "eq-acked-2", "eq-mon-3"],
+        )
+
+    @override_settings(
+        SUPABASE_URL="https://example.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY="test-service-role-key",
+    )
+    def test_acknowledge_earthquake_alert_marks_acknowledged_and_deactivates_alert(self):
+        now = datetime.now(timezone.utc)
+        event_id = "eq-active-100"
+
+        with patch("requests.get") as mock_get, patch("requests.patch") as mock_patch:
+            mock_get.return_value = self._mock_supabase_response(
+                [
+                    {
+                        "external_event_id": event_id,
+                        "magnitude": 6.1,
+                        "place": "Bukidnon, Philippines",
+                        "classification": "earthquake_alert",
+                        "alert_detected_at": now.isoformat(),
+                        "alert_expires_at": (now + timedelta(minutes=2)).isoformat(),
+                        "alert_active": True,
+                        "acknowledged": False,
+                    }
+                ]
+            )
+            mock_patch.return_value = self._mock_supabase_response(
+                [
+                    {
+                        "external_event_id": event_id,
+                        "acknowledged": True,
+                        "alert_active": False,
+                    }
+                ]
+            )
+
+            response = self.client.post(f"/api/auth/earthquakes/{event_id}/acknowledge/")
+
+        self.assertIn(response.status_code, (status.HTTP_200_OK, status.HTTP_204_NO_CONTENT))
+        if mock_patch.called:
+            patch_kwargs = mock_patch.call_args.kwargs
+            sent_json = patch_kwargs.get("json") or {}
+            self.assertTrue(sent_json.get("acknowledged"))
+            self.assertFalse(sent_json.get("alert_active", True))
+
+    def test_acknowledge_earthquake_alert_requires_authentication(self):
+        unauth_client = APIClient()
+        response = unauth_client.post("/api/auth/earthquakes/eq-active-100/acknowledge/")
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )

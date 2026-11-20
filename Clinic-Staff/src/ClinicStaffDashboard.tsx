@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
-import { supabase } from './services/supabaseClient';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   Activity,
   Bell,
@@ -13,23 +13,22 @@ import {
   AlertTriangle,
   Stethoscope,
   X,
-  ChevronDown,
-  Filter,
-  MapPin,
-  Lock,
-  Mail,
-  Phone,
-  Users,
-  UserCheck,
-  UserPlus,
+  RefreshCw,
   ExternalLink,
-  Volume2,
-  RefreshCw
+  Users
 } from 'lucide-react';
 
 interface StaffDashboardProps {
   displayName: string;
   onLogout: () => void;
+  globalRealtimeStatus?: 'disconnected' | 'connecting' | 'connected' | 'error';
+  latestGlobalEvent?: {
+    id: string;
+    sourceTable: 'earthquake_monitoring' | 'notification';
+    eventType: string;
+    receivedAt: string;
+    payload: Record<string, any>;
+  } | null;
 }
 
 interface IncidentReport {
@@ -65,6 +64,7 @@ interface NotificationItem {
   type: string;
   unread: boolean;
   incidentId?: number;
+  earthquakeEvent?: EarthquakeEvent;
 }
 
 export type EarthquakeClassification = 'monitoring' | 'advisory' | 'earthquake_alert';
@@ -83,6 +83,29 @@ interface EarthquakeEvent {
   reported_intensity?: string | null;
   classification?: EarthquakeClassification;
   source: string;
+  alert_detected_at?: string | null;
+  alert_expires_at?: string | null;
+  alert_active?: boolean;
+  acknowledged?: boolean;
+}
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.replace(/\/+$/, '');
+const SUPABASE_KEY =
+  import.meta.env.VITE_SUPABASE_ANON_KEY ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+function createFallbackSupabaseClient(): SupabaseClient {
+  return createClient(
+    SUPABASE_URL || 'https://placeholder.supabase.co',
+    SUPABASE_KEY || 'placeholder-anon-key'
+  );
+}
+
+let cachedSupabaseClient: SupabaseClient | null = null;
+
+function getSupabaseClient(): SupabaseClient {
+  if (cachedSupabaseClient) return cachedSupabaseClient;
+  cachedSupabaseClient = createFallbackSupabaseClient();
+  return cachedSupabaseClient;
 }
 
 function getEventTimestampMs(eq: EarthquakeEvent): number {
@@ -96,6 +119,93 @@ function getEventTimestampMs(eq: EarthquakeEvent): number {
     if (Number.isFinite(parsed)) return parsed;
   }
   return 0;
+}
+
+function getEarthquakeEventKey(eq: EarthquakeEvent | null | undefined): string {
+  if (!eq) return '';
+  return String(eq.external_event_id || eq.id || '').trim();
+}
+
+function getAlertExpiresAtMs(eq: EarthquakeEvent | null | undefined): number | null {
+  if (!eq || !eq.alert_expires_at) return null;
+  const parsed = Date.parse(String(eq.alert_expires_at));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isAlertActive(
+  eq: EarthquakeEvent | null | undefined,
+  dismissedIds: string[],
+  nowMs: number
+): boolean {
+  if (!eq) return false;
+  if (eq.classification !== 'earthquake_alert') return false;
+  if (Boolean(eq.acknowledged)) return false;
+  if (eq.alert_active === false) return false;
+
+  const key = getEarthquakeEventKey(eq);
+  if (key && dismissedIds.includes(key)) return false;
+
+  const expiresAtMs = getAlertExpiresAtMs(eq);
+  if (expiresAtMs === null) return false;
+
+  return nowMs < expiresAtMs;
+}
+
+function normalizeRealtimeEarthquakeRow(row: any): EarthquakeEvent | null {
+  if (!row || typeof row !== 'object') return null;
+  const eventId = String(
+    row.external_event_id || row.earthquake_event_id || row.id || ''
+  ).trim();
+  if (!eventId) return null;
+
+  const rawClass = String(row.classification || '').trim().toLowerCase();
+  const classification: EarthquakeClassification =
+    rawClass === 'earthquake_alert' || rawClass === 'advisory' || rawClass === 'monitoring'
+      ? rawClass
+      : 'earthquake_alert';
+
+  const parsedMag =
+    typeof row.magnitude === 'number'
+      ? row.magnitude
+      : row.magnitude != null && row.magnitude !== ''
+      ? Number(row.magnitude)
+      : null;
+
+  const parsedDepth =
+    typeof row.depth_km === 'number'
+      ? row.depth_km
+      : row.depth_km != null && row.depth_km !== ''
+      ? Number(row.depth_km)
+      : null;
+
+  const parsedDist =
+    typeof row.distance_from_cdo_km === 'number'
+      ? row.distance_from_cdo_km
+      : row.distance_from_cdo_km != null && row.distance_from_cdo_km !== ''
+      ? Number(row.distance_from_cdo_km)
+      : 0;
+
+  const occurredAt = row.event_occurred_at || row.created_at || new Date().toISOString();
+
+  return {
+    id: eventId,
+    external_event_id: row.external_event_id || eventId,
+    magnitude: Number.isFinite(parsedMag as number) ? parsedMag : null,
+    place: String(row.place || row.location || 'Regional Seismic Zone'),
+    time: occurredAt,
+    event_occurred_at: occurredAt,
+    evaluated_at: row.evaluated_at || row.created_at,
+    url: row.url || 'https://www.phivolcs.dost.gov.ph/',
+    depth_km: Number.isFinite(parsedDepth as number) ? parsedDepth : null,
+    distance_from_cdo_km: Number.isFinite(parsedDist) ? parsedDist : 0,
+    reported_intensity: row.reported_intensity ?? null,
+    classification,
+    source: String(row.source || 'PHIVOLCS'),
+    alert_detected_at: row.alert_detected_at ?? null,
+    alert_expires_at: row.alert_expires_at ?? null,
+    alert_active: typeof row.alert_active === 'boolean' ? row.alert_active : undefined,
+    acknowledged: Boolean(row.acknowledged),
+  };
 }
 
 function formatClassificationLabel(classification?: EarthquakeClassification): string {
@@ -158,16 +268,12 @@ async function refreshClinicStaffAccessToken(): Promise<string> {
 
   localStorage.setItem('clinic_staff_access_token', data.access);
 
-  // Save a rotated refresh token if Django provides one.
   if (data.refresh) {
     localStorage.setItem('clinic_staff_refresh_token', data.refresh);
   }
 
   return data.access;
 }
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.replace(/\/+$/, '');
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 async function refreshSupabaseToken(): Promise<string> {
   const djangoAccessToken = localStorage.getItem('clinic_staff_access_token');
@@ -233,7 +339,7 @@ async function supabaseRequest(path: string, options: RequestInit = {}): Promise
         throw new Error('Supabase JWT expired.');
       }
       throw new Error(parsed.message || body);
-    } catch (e) {
+    } catch {
       throw new Error(body || `Supabase request failed (${response.status}).`);
     }
   }
@@ -247,6 +353,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const [earthquakes, setEarthquakes] = useState<EarthquakeEvent[]>([]);
   const [earthquakeError, setEarthquakeError] = useState('');
   const [dismissedQuakeIds, setDismissedQuakeIds] = useState<string[]>([]);
+  const [acknowledgingQuake, setAcknowledgingQuake] = useState(false);
 
   // Audio alert state. The first normal interaction unlocks future sound playback
   // in browsers that block autoplay until the user interacts with the page.
@@ -283,12 +390,15 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
   const [searchQuery, setSearchQuery] = useState('');
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
-  // Live Date and Time State
+  // Live Date and Time + 1-second alert expiry tick
   const [currentDateTime, setCurrentDateTime] = useState(new Date());
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setCurrentDateTime(new Date());
+      const d = new Date();
+      setCurrentDateTime(d);
+      setNowMs(d.getTime());
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -420,12 +530,42 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }
   }, []);
 
-  // Supabase Realtime Subscription for instant Incident Feed updates
-  useEffect(() => {
-    console.log('Connecting to Supabase Realtime...');
+  const upsertRealtimeEarthquake = useCallback((rawRow: any) => {
+    const normalized = normalizeRealtimeEarthquakeRow(rawRow);
+    if (!normalized) return;
 
-    const incidentChannel = supabase
-      .channel('incident-changes')
+    const key = getEarthquakeEventKey(normalized);
+    if (
+      normalized.classification === 'earthquake_alert' &&
+      isAlertActive(normalized, [], Date.now()) &&
+      key
+    ) {
+      setDismissedQuakeIds((prev) => prev.filter((id) => id !== key && id !== normalized.id));
+    }
+
+    setEarthquakes((previous) => {
+      const filtered = previous.filter(
+        (ev) =>
+          getEarthquakeEventKey(ev) !== key &&
+          ev.id !== normalized.id &&
+          ev.external_event_id !== normalized.id
+      );
+      return [normalized, ...filtered].sort(
+        (a, b) => getEventTimestampMs(b) - getEventTimestampMs(a)
+      );
+    });
+    setEarthquakeError('');
+  }, []);
+
+  // Supabase Realtime Subscription for instant Incident Feed & Earthquake updates
+  useEffect(() => {
+    if (!SUPABASE_URL || !SUPABASE_KEY) return;
+
+    const rtClient = getSupabaseClient();
+    const channelId = Math.random().toString(36).substring(2, 9);
+
+    const incidentChannel = rtClient
+      .channel(`clinic-incident-${channelId}`)
       .on(
         'postgres_changes',
         {
@@ -433,24 +573,64 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
           schema: 'public',
           table: 'incident',
         },
-        (payload) => {
-          console.log('Incident table changed:', payload);
+        () => {
           void loadData();
         }
       )
-      .subscribe((status, error) => {
-        console.log('Supabase Realtime status:', status);
+      .subscribe();
 
-        if (error) {
-          console.error('Supabase Realtime error:', error);
+    const earthquakeChannel = rtClient
+      .channel(`clinic-earthquake-${channelId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'earthquake_monitoring',
+        },
+        (payload) => {
+          if (payload.eventType === 'DELETE') {
+            const oldId = String(
+              (payload.old as any)?.external_event_id || (payload.old as any)?.id || ''
+            );
+            if (oldId) {
+              setEarthquakes((prev) => prev.filter((ev) => ev.id !== oldId));
+            }
+            return;
+          }
+          upsertRealtimeEarthquake(payload.new);
         }
-      });
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notification',
+        },
+        (payload) => {
+          const row: any = payload?.new;
+          if (
+            row &&
+            (String(row.type || '').toLowerCase() === 'earthquake_alert' ||
+              String(row.classification || '').toLowerCase() === 'earthquake_alert' ||
+              row.earthquake_event_id)
+          ) {
+            upsertRealtimeEarthquake({
+              ...row,
+              id: row.earthquake_event_id || row.external_event_id || row.id,
+              classification: row.classification || 'earthquake_alert',
+            });
+          }
+        }
+      )
+      .subscribe();
 
     return () => {
-      console.log('Cleaning up Supabase Realtime subscription...');
-      void supabase.removeChannel(incidentChannel);
+      void rtClient.removeChannel(incidentChannel);
+      void rtClient.removeChannel(earthquakeChannel);
     };
-  }, [loadData]);
+  }, [loadData, upsertRealtimeEarthquake]);
 
   const loadEarthquakes = useCallback(async (showLoading = true) => {
     if (showLoading) setLoadingEarthquakes(true);
@@ -473,10 +653,8 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
         });
       };
 
-      // First attempt using the existing access token.
       let res = await makeRequest(token);
 
-      // If Django rejects the token, refresh it and retry.
       if (res.status === 401) {
         token = await refreshClinicStaffAccessToken();
         res = await makeRequest(token);
@@ -494,14 +672,18 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
       const data = await res.json();
       setEarthquakeError('');
+      setNowMs(Date.now());
 
-      // Preserve locally generated simulation events.
-      setEarthquakes((previous) => [
-        ...(data.events || []),
-        ...previous.filter(
-          (event) => event.source === 'Simulation Test'
-        ),
-      ]);
+      setEarthquakes((previous) => {
+        const fetchedList: EarthquakeEvent[] = Array.isArray(data.events) ? data.events : [];
+        const fetchedIds = new Set(fetchedList.map((ev) => getEarthquakeEventKey(ev)));
+        const preserved = previous.filter(
+          (event) =>
+            event.source === 'Simulation Test' &&
+            !fetchedIds.has(getEarthquakeEventKey(event))
+        );
+        return [...fetchedList, ...preserved];
+      });
     } catch (err) {
       const message =
         err instanceof Error
@@ -516,8 +698,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }
   }, []);
 
-  // Add a local-only earthquake event to test the existing alert modal and audio.
-  // This does not call the backend or create a real earthquake record.
   const handleTestEarthquake = useCallback(async () => {
     setError('');
     try {
@@ -561,10 +741,14 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       }
 
       const simEvent: EarthquakeEvent = data.event;
-      setDismissedQuakeIds((previous) => previous.filter((id) => id !== simEvent.id));
+      const simKey = getEarthquakeEventKey(simEvent);
+      setDismissedQuakeIds((previous) =>
+        previous.filter((id) => id !== simKey && id !== simEvent.id)
+      );
+      setNowMs(Date.now());
       setEarthquakes((previous) => [
         simEvent,
-        ...previous.filter((event) => event.id !== simEvent.id),
+        ...previous.filter((event) => getEarthquakeEventKey(event) !== simKey),
       ]);
       setEarthquakeError('');
     } catch (err) {
@@ -575,8 +759,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }
   }, []);
 
-  // Refresh incident reports once per minute, but check the earthquake feed
-  // every 10 seconds so new alerts are detected sooner.
   useEffect(() => {
     void loadData();
     void loadEarthquakes();
@@ -586,9 +768,8 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     }, 60 * 1000);
 
     const earthquakePolling = setInterval(() => {
-      // Silent background refresh; keep the manual refresh icon from flashing.
       void loadEarthquakes(false);
-    }, 10 * 1000);
+    }, 30 * 1000);
 
     return () => {
       clearInterval(dataPolling);
@@ -596,26 +777,17 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     };
   }, [loadData, loadEarthquakes]);
 
-  // Derive active recent earthquake alerts strictly from backend-evaluated classification
-  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-  const currentTimestamp = new Date().getTime();
-
+  // Keep full history in `earthquakes`; only filter active alerts by server `alert_expires_at`
   const activeEarthquakeAlerts = useMemo(() => {
-    return earthquakes.filter((eq) => {
-      const eventMs = getEventTimestampMs(eq);
-      const isWithin24Hours = eventMs > 0 ? currentTimestamp - eventMs <= ONE_DAY_MS : true;
-      const isAlertClassification = eq.classification === 'earthquake_alert';
-      const notDismissed = !dismissedQuakeIds.includes(eq.id);
-      return isWithin24Hours && isAlertClassification && notDismissed;
-    });
-  }, [earthquakes, dismissedQuakeIds, currentTimestamp]);
+    return earthquakes.filter((eq) => isAlertActive(eq, dismissedQuakeIds, nowMs));
+  }, [earthquakes, dismissedQuakeIds, nowMs]);
 
-  // Select the most recent alert event, regardless of the API's array order.
   const latestQuakeAlert = activeEarthquakeAlerts.reduce<EarthquakeEvent | null>(
     (latest, quake) => (!latest || getEventTimestampMs(quake) > getEventTimestampMs(latest) ? quake : latest),
     null
   );
   latestQuakeAlertRef.current = latestQuakeAlert;
+  const latestQuakeKey = getEarthquakeEventKey(latestQuakeAlert);
 
   const stopEarthquakeAudio = useCallback(() => {
     pendingQuakeAudioIdRef.current = null;
@@ -630,7 +802,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     const audio = audioRef.current;
     if (!audio) return;
 
-    // Save the alert until the browser permits sound playback after user interaction.
     if (!audioUnlockedRef.current) {
       pendingQuakeAudioIdRef.current = quakeId;
       return;
@@ -650,22 +821,77 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     });
   }, []);
 
-  // Play once for each newly displayed earthquake. Older alerts revealed after
-  // dismissing the current one will not restart the siren.
   useEffect(() => {
-    if (!latestQuakeAlert) {
+    if (!latestQuakeAlert || !latestQuakeKey) {
       stopEarthquakeAudio();
       return;
     }
 
-    if (audioHandledQuakeIdsRef.current.has(latestQuakeAlert.id)) return;
-    audioHandledQuakeIdsRef.current.add(latestQuakeAlert.id);
-    playEarthquakeAudio(latestQuakeAlert.id);
-  }, [latestQuakeAlert?.id, playEarthquakeAudio, stopEarthquakeAudio]);
+    if (audioHandledQuakeIdsRef.current.has(latestQuakeKey)) return;
+    audioHandledQuakeIdsRef.current.add(latestQuakeKey);
+    playEarthquakeAudio(latestQuakeKey);
+  }, [latestQuakeAlert, latestQuakeKey, playEarthquakeAudio, stopEarthquakeAudio]);
 
-  // Browsers block audible autoplay until the user interacts with the page.
-  // A muted play/pause primes the audio element; when an alert is already
-  // waiting, the first non-dismiss interaction starts its sound directly.
+  const handleAcknowledgeEarthquakeAlert = useCallback(
+    async (quake: EarthquakeEvent) => {
+      const eventKey = getEarthquakeEventKey(quake);
+      if (!eventKey || acknowledgingQuake) return;
+
+      setAcknowledgingQuake(true);
+      activeEarthquakeAlerts.forEach((item) => {
+        const k = getEarthquakeEventKey(item);
+        if (k) audioHandledQuakeIdsRef.current.add(k);
+      });
+      stopEarthquakeAudio();
+
+      // Mark acknowledged: true inside `earthquakes` immediately while preserving the event in history
+      setEarthquakes((prev) =>
+        prev.map((ev) =>
+          getEarthquakeEventKey(ev) === eventKey
+            ? { ...ev, acknowledged: true, alert_active: false }
+            : ev
+        )
+      );
+      setDismissedQuakeIds((prev) =>
+        prev.includes(eventKey) ? prev : [...prev, eventKey]
+      );
+
+      try {
+        let token = localStorage.getItem('clinic_staff_access_token');
+        if (token) {
+          const encodedEventId = encodeURIComponent(eventKey);
+          const sendAck = (accessToken: string) =>
+            fetch(`${API_BASE_URL}/earthquakes/${encodedEventId}/acknowledge/`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${accessToken}`,
+              },
+            });
+
+          let res = await sendAck(token);
+          if (res.status === 401) {
+            token = await refreshClinicStaffAccessToken();
+            res = await sendAck(token);
+          }
+
+          if (!res.ok) {
+            const errData = await res.json().catch(() => null);
+            console.warn(
+              'Acknowledge endpoint returned non-OK:',
+              errData?.detail || errData?.error || res.status
+            );
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to notify server of alert acknowledgment:', err);
+      } finally {
+        setAcknowledgingQuake(false);
+      }
+    },
+    [acknowledgingQuake, activeEarthquakeAlerts, stopEarthquakeAudio]
+  );
+
   const handleAudioUserGesture = useCallback((event: any) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest?.('[data-earthquake-dismiss="true"]')) return;
@@ -674,7 +900,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     if (!audio || audioUnlockedRef.current) return;
 
     const pendingId = pendingQuakeAudioIdRef.current;
-    if (pendingId && latestQuakeAlertRef.current?.id === pendingId) {
+    if (pendingId && getEarthquakeEventKey(latestQuakeAlertRef.current) === pendingId) {
       audio.muted = false;
       audio.loop = true;
       audio.currentTime = 0;
@@ -695,9 +921,8 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       audio.muted = false;
       audioUnlockedRef.current = true;
 
-      // An earthquake may have arrived while the muted audio was being primed.
       const waitingId = pendingQuakeAudioIdRef.current;
-      if (waitingId && latestQuakeAlertRef.current?.id === waitingId) {
+      if (waitingId && getEarthquakeEventKey(latestQuakeAlertRef.current) === waitingId) {
         audio.loop = true;
         audio.currentTime = 0;
         void audio.play().then(() => {
@@ -711,7 +936,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     });
   }, []);
 
-  // Combined Notifications (Incidents + Backend-classified Earthquakes)
   useEffect(() => {
     const now = Date.now();
     const incidentNotifs: NotificationItem[] = incidents.map((inc: IncidentReport) => {
@@ -750,20 +974,29 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     const earthquakeNotifs: NotificationItem[] = earthquakes
       .filter((eq) => {
         const eventMs = getEventTimestampMs(eq);
-        const isRecent = eventMs > 0 ? now - eventMs <= ONE_DAY_MS : true;
+        const isRecent = eventMs > 0 ? now - eventMs <= 24 * 60 * 60 * 1000 : true;
         return isRecent && (eq.classification === 'earthquake_alert' || eq.classification === 'advisory');
       })
-      .map((eq) => ({
-        id: `eq-${eq.id}`,
-        title: `${formatClassificationLabel(eq.classification)} (${eq.magnitude !== null ? `Mag ${eq.magnitude.toFixed(1)}` : 'PHIVOLCS'})`,
-        message: `${eq.place} — ${eq.distance_from_cdo_km} km from USTP CDO${eq.reported_intensity ? ` • Intensity ${eq.reported_intensity}` : ''}. Drop, Cover, and Hold On.`,
-        time: 'Recent',
-        type: eq.classification === 'earthquake_alert' ? 'critical' : 'info',
-        unread: true,
-      }));
+      .map((eq) => {
+        const eventMs = getEventTimestampMs(eq);
+        const timeStr =
+          eventMs > 0
+            ? new Date(eventMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : 'Recent';
+        const eqKey = getEarthquakeEventKey(eq);
+        return {
+          id: `eq-${eq.id}`,
+          title: `${formatClassificationLabel(eq.classification)} (${eq.magnitude !== null ? `Mag ${eq.magnitude.toFixed(1)}` : 'PHIVOLCS'})`,
+          message: `${eq.place} — ${eq.distance_from_cdo_km} km from USTP CDO${eq.reported_intensity ? ` • Intensity ${eq.reported_intensity}` : ''}. Drop, Cover, and Hold On.`,
+          time: timeStr,
+          type: eq.classification === 'earthquake_alert' ? 'critical' : 'info',
+          unread: !eq.acknowledged && !dismissedQuakeIds.includes(eqKey),
+          earthquakeEvent: eq,
+        };
+      });
 
     setNotifications([...earthquakeNotifs, ...incidentNotifs]);
-  }, [incidents, earthquakes]);
+  }, [incidents, earthquakes, dismissedQuakeIds]);
 
   const updateResponderAvailability = async (
     responder: Responder,
@@ -818,7 +1051,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     setError('');
 
     try {
-      // Step 1: Update incident status
       await supabaseRequest(
         `incident?incident_id=eq.${incident.incident_id}`,
         {
@@ -827,7 +1059,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
         }
       );
 
-      // Step 2: Create notification and assign responder
       if (
         responderId > 0 &&
         responderId !== incident.assigned_responder_id
@@ -836,7 +1067,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
           r => (r.responders_id ?? r.responder_id ?? r.id) === responderId
         );
 
-        // Create notification
         const notificationResult = await supabaseRequest(
           'notification?select=notification_id',
           {
@@ -862,7 +1092,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
           throw new Error('Failed to create the responder notification.');
         }
 
-        // Link notification to responder
         await supabaseRequest('responder_notification', {
           method: 'POST',
           body: JSON.stringify({
@@ -872,7 +1101,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
           }),
         });
 
-        // Update responder availability
         if (
           chosenResponder &&
           ['assigned', 'active'].includes(newStatus.toLowerCase())
@@ -881,7 +1109,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
         }
       }
 
-      // Step 3: Make responder available when incident is resolved
       if (newStatus.toLowerCase() === 'resolved' && responderId > 0) {
         const chosenResponder = responders.find(
           r => (r.responders_id ?? r.responder_id ?? r.id) === responderId
@@ -892,10 +1119,8 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
         }
       }
 
-      // Step 4: Refresh dashboard
       setSelectedIncidentForUpdate(null);
       await loadData();
-
     } catch (err) {
       setError(
         err instanceof Error
@@ -912,7 +1137,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
     setSelectedResponderIdForModal(item.assigned_responder_id || 0);
   };
 
-  // Case-insensitive filtering excluding resolved/completed cases for active operational feed
   const activeOperationalIncidents = useMemo(() => {
     return incidents.filter((item) => {
       const s = (item.status || 'pending').toLowerCase();
@@ -951,7 +1175,6 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
       });
     }
 
-    // Sort incidents by reported_at newest-first
     return list.sort((a, b) => {
       const timeA = a.reported_at ? new Date(a.reported_at).getTime() : 0;
       const timeB = b.reported_at ? new Date(b.reported_at).getTime() : 0;
@@ -1035,20 +1258,10 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
 
             <button
               data-earthquake-dismiss="true"
-              onClick={() => {
-                // Mark every alert already in this batch as handled so switching
-                // to an older alert does not restart the sound after Dismiss.
-                activeEarthquakeAlerts.forEach((quake) => {
-                  audioHandledQuakeIdsRef.current.add(quake.id);
-                });
-                stopEarthquakeAudio();
-                setDismissedQuakeIds((prev) =>
-                  prev.includes(latestQuakeAlert.id) ? prev : [...prev, latestQuakeAlert.id]
-                );
-              }}
+              onClick={() => void handleAcknowledgeEarthquakeAlert(latestQuakeAlert)}
               className="w-full py-3.5 bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white rounded-2xl text-sm font-black shadow-lg shadow-red-900/50 transition cursor-pointer tracking-wide"
             >
-              Dismiss
+              Acknowledge & Dismiss
             </button>
           </div>
         </div>
@@ -1322,7 +1535,18 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                       <div className="p-6 text-center text-slate-400 text-sm">No notifications available</div>
                     ) : (
                       notifications.map((n) => (
-                        <div key={n.id} className={`p-3.5 hover:bg-slate-50 transition ${n.unread ? 'bg-indigo-50/50' : ''}`}>
+                        <div
+                          key={n.id}
+                          onClick={() => {
+                            if (n.earthquakeEvent) {
+                              setShowNotifications(false);
+                              setSelectedEarthquakeForDetails(n.earthquakeEvent);
+                            }
+                          }}
+                          className={`p-3.5 hover:bg-slate-50 transition ${
+                            n.unread ? 'bg-indigo-50/50' : ''
+                          } ${n.earthquakeEvent ? 'cursor-pointer border-l-4 border-l-rose-500' : ''}`}
+                        >
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs font-bold text-slate-900">{n.title}</span>
                             <span className="text-[10px] text-slate-400 font-medium">{n.time}</span>
@@ -1521,7 +1745,7 @@ export default function ClinicStaffDashboard({ displayName, onLogout }: StaffDas
                         </span>
                       </div>
                       <p className="text-xs text-slate-500 font-medium">
-                        PHIVOLCS Seismic Monitoring • Past 30 Days • Recorded vs. Alert Tiers
+                        PHIVOLCS Seismic Monitoring • Realtime + Feed • Recorded vs. Alert Tiers
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">

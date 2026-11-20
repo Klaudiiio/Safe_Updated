@@ -1,5 +1,16 @@
 import { useState, useMemo } from 'react';
-import { AlertCircle, AlertTriangle, Bell, CheckCircle, Radio, Trash2, CheckCheck, UserCheck } from 'lucide-react';
+import {
+  Activity,
+  AlertCircle,
+  AlertTriangle,
+  Bell,
+  CheckCircle,
+  Radio,
+  Trash2,
+  CheckCheck,
+  UserCheck,
+  MapPin,
+} from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -11,6 +22,43 @@ function notificationTime(value?: string): string {
   const timestamp = new Date(value);
   if (Number.isNaN(timestamp.getTime())) return 'Time unavailable';
   return timestamp.toLocaleString();
+}
+
+function isEarthquakeNotification(notification: any): boolean {
+  if (!notification || typeof notification !== 'object') return false;
+  const typeVal = String(notification.type || '').trim().toLowerCase();
+  const classVal = String(notification.classification || '').trim().toLowerCase();
+  return (
+    typeVal === 'earthquake_alert' ||
+    classVal === 'earthquake_alert' ||
+    Boolean(notification.earthquake_event_id)
+  );
+}
+
+function formatMagnitude(mag: any): string | null {
+  if (mag === null || mag === undefined || mag === '') return null;
+  const num = typeof mag === 'number' ? mag : Number(mag);
+  if (!Number.isFinite(num)) return null;
+  return `M ${num.toFixed(1)}`;
+}
+
+function formatAffectedArea(notification: any): string | null {
+  const parts: string[] = [];
+  if (notification?.distance_from_cdo_km !== null && notification?.distance_from_cdo_km !== undefined && notification?.distance_from_cdo_km !== '') {
+    const dist = typeof notification.distance_from_cdo_km === 'number'
+      ? notification.distance_from_cdo_km
+      : Number(notification.distance_from_cdo_km);
+    if (Number.isFinite(dist)) {
+      parts.push(`${dist.toFixed(1)} km from USTP CDO`);
+    }
+  }
+  if (notification?.reported_intensity) {
+    parts.push(`Intensity ${String(notification.reported_intensity)}`);
+  }
+  if (parts.length === 0 && (notification?.type === 'earthquake_alert' || notification?.classification === 'earthquake_alert')) {
+    parts.push('Regional Seismic Zone (USTP CDO)');
+  }
+  return parts.length > 0 ? parts.join(' • ') : null;
 }
 
 export function Notifications() {
@@ -63,13 +111,19 @@ export function Notifications() {
   };
 
   const criticalCount = safeNotifications.filter((notification: any) => {
-    const priority = (notification.priority || notification.priority_level || '').toLowerCase();
-    const typeStr = (notification.type || notification.title || '').toLowerCase();
-    return priority === 'urgent' || priority === 'critical' || typeStr.includes('urgent') || typeStr.includes('critical');
+    const priority = (notification.severity || notification.priority || notification.priority_level || '').toLowerCase();
+    const typeStr = (notification.type || notification.classification || notification.title || '').toLowerCase();
+    return (
+      priority === 'urgent' ||
+      priority === 'critical' ||
+      typeStr.includes('urgent') ||
+      typeStr.includes('critical') ||
+      typeStr.includes('earthquake_alert')
+    );
   }).length;
 
   const minorCount = safeNotifications.filter((notification: any) => {
-    const priority = (notification.priority || notification.priority_level || '').toLowerCase();
+    const priority = (notification.severity || notification.priority || notification.priority_level || '').toLowerCase();
     const typeStr = (notification.type || notification.title || '').toLowerCase();
     return priority === 'minor' || typeStr.includes('minor') || typeStr.includes('warning') || typeStr.includes('registration');
   }).length;
@@ -82,7 +136,7 @@ export function Notifications() {
   return (
     <div className="space-y-6">
       <DataNotice loading={loading} error={error || actionError} />
-     
+
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/40 backdrop-blur-sm p-5 rounded-2xl border border-sky-100 shadow-sm">
         <div>
@@ -159,56 +213,132 @@ export function Notifications() {
         <div className="space-y-3">
           {safeNotifications.map((notification: any) => {
             const id = notification.notification_id || notification.id || Math.random();
-            const message = notification.message || notification.content || (notification.incident_id ? `Incident #${notification.incident_id}` : 'System alert broadcast');
+            const isEarthquake = isEarthquakeNotification(notification);
+            const message =
+              notification.message ||
+              notification.content ||
+              (notification.incident_id ? `Incident #${notification.incident_id}` : 'System alert broadcast');
             const sentAt = notification.sent_at || notification.sentAt || notification.created_at;
             const status = notification.status || notification.delivery_status || 'Sent';
             const incidentId = notification.incident_id || notification.incidentId;
             const isReg = String(notification.type || '').toLowerCase().includes('registration');
 
-            const Icon = isReg ? UserCheck : (notification.isCritical ? AlertCircle : Radio);
+            const severityLabel = String(
+              notification.severity ||
+                notification.priority ||
+                notification.priority_level ||
+                (isEarthquake ? 'critical' : 'normal')
+            ).trim();
+
+            const magnitudeLabel = isEarthquake ? formatMagnitude(notification.magnitude) : null;
+            const locationLabel = isEarthquake
+              ? String(notification.place || notification.location || 'Unknown Epicenter').trim()
+              : null;
+            const affectedAreaLabel = isEarthquake ? formatAffectedArea(notification) : null;
+
+            const Icon = isEarthquake
+              ? Activity
+              : isReg
+                ? UserCheck
+                : (notification.isCritical || severityLabel.toLowerCase() === 'critical'
+                  ? AlertCircle
+                  : Radio);
 
             return (
               <Card
                 key={id}
-                className="bg-white border-sky-100/60 shadow-md p-4 transition-all hover:shadow-lg rounded-2xl relative group"
+                className={`bg-white shadow-md p-4 transition-all hover:shadow-lg rounded-2xl relative group ${
+                  isEarthquake ? 'border-2 border-rose-200' : 'border-sky-100/60'
+                }`}
               >
                 <div className="flex items-start gap-4">
-                  <div className={`w-12 h-12 ${
-                    isReg
-                      ? 'bg-purple-100 border border-purple-200'
-                      : notification.isCritical
-                        ? 'bg-red-100 border border-red-200'
-                        : 'bg-blue-100 border border-blue-200'
-                  } rounded-xl flex items-center justify-center flex-shrink-0`}>
-                    <Icon className={`w-6 h-6 ${
-                      isReg
-                        ? 'text-purple-600'
-                        : notification.isCritical
-                          ? 'text-red-600'
-                          : 'text-blue-600'
-                    }`} />
+                  <div
+                    className={`w-12 h-12 ${
+                      isEarthquake
+                        ? 'bg-rose-100 border border-rose-200'
+                        : isReg
+                          ? 'bg-purple-100 border border-purple-200'
+                          : notification.isCritical || severityLabel.toLowerCase() === 'critical'
+                            ? 'bg-red-100 border border-red-200'
+                            : 'bg-blue-100 border border-blue-200'
+                    } rounded-xl flex items-center justify-center flex-shrink-0`}
+                  >
+                    <Icon
+                      className={`w-6 h-6 ${
+                        isEarthquake
+                          ? 'text-rose-600'
+                          : isReg
+                            ? 'text-purple-600'
+                            : notification.isCritical || severityLabel.toLowerCase() === 'critical'
+                              ? 'text-red-600'
+                              : 'text-blue-600'
+                      }`}
+                    />
                   </div>
+
                   <div className="flex-1 min-w-0 pr-8">
                     <div className="flex items-start justify-between gap-3">
-                      <h3 className="font-bold text-slate-900 text-base capitalize">
-                        {notification.title || notification.notification_type || notification.type || 'System Alert'}
-                      </h3>
-                      <span className="text-xs text-slate-500 font-mono font-medium">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-bold text-slate-900 text-base">
+                          {notification.title ||
+                            (isEarthquake
+                              ? `Earthquake Alert${magnitudeLabel ? `: ${magnitudeLabel}` : ''}`
+                              : notification.notification_type || notification.type || 'System Alert')}
+                        </h3>
+                        {isEarthquake && (
+                          <Badge className="bg-rose-600 text-white border-rose-700 text-[10px] font-extrabold uppercase tracking-wider">
+                            Earthquake Alert
+                          </Badge>
+                        )}
+                      </div>
+                      <span className="text-xs text-slate-500 font-mono font-medium shrink-0">
                         {notificationTime(sentAt)}
                       </span>
                     </div>
-                   
+
                     <p className="mt-1 text-sm text-slate-700 font-medium leading-relaxed">
                       {message}
                     </p>
 
+                    {isEarthquake && (
+                      <div className="mt-2.5 grid grid-cols-1 sm:grid-cols-3 gap-2 bg-rose-50/70 border border-rose-100 rounded-xl p-3 text-xs">
+                        <div>
+                          <span className="text-slate-500 font-semibold block text-[10px] uppercase">Severity</span>
+                          <span className="font-extrabold text-rose-700 uppercase">{severityLabel}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 font-semibold block text-[10px] uppercase">Magnitude</span>
+                          <span className="font-extrabold text-slate-900">{magnitudeLabel || 'N/A'}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 font-semibold block text-[10px] uppercase">Location & Affected Area</span>
+                          <span className="font-bold text-slate-800 inline-flex items-center gap-1">
+                            <MapPin className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                            <span>
+                              {locationLabel}
+                              {affectedAreaLabel ? ` (${affectedAreaLabel})` : ''}
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
                     {incidentId && incidentId !== 'null' && incidentId !== '—' && (
-                      <p className="mt-1 text-xs text-blue-600 font-mono font-bold">
+                      <p className="mt-1.5 text-xs text-blue-600 font-mono font-bold">
                         Related Incident: #{incidentId}
                       </p>
                     )}
 
-                    <div className="mt-3 flex items-center gap-2">
+                    <div className="mt-3 flex items-center gap-2 flex-wrap">
+                      <Badge
+                        className={`text-xs font-bold capitalize ${
+                          severityLabel.toLowerCase() === 'critical' || severityLabel.toLowerCase() === 'urgent'
+                            ? 'bg-rose-100 text-rose-700 border-rose-200'
+                            : 'bg-amber-100 text-amber-700 border-amber-200'
+                        }`}
+                      >
+                        Severity: {severityLabel}
+                      </Badge>
                       <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-xs font-semibold capitalize">
                         Delivery: {status}
                       </Badge>
